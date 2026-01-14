@@ -14,6 +14,7 @@
 	let studentName = '';
 	let capturedImage: string | null = null;
 	let fileInput: HTMLInputElement;
+	let cameraInput: HTMLInputElement;
 
 	let submissionResult: {
 		score: number | null;
@@ -226,13 +227,23 @@
 					</div>
 				{:else}
 					<div class="capture-options">
-						<button class="btn-primary capture-btn" on:click={() => fileInput.click()}>
-							Take Photo / Upload
+						<button class="btn-primary capture-btn" on:click={() => cameraInput.click()}>
+							Take Photo
+						</button>
+						<button class="btn-secondary capture-btn" on:click={() => fileInput.click()}>
+							Upload from Gallery
 						</button>
 						<input
 							type="file"
 							accept="image/*"
 							capture="environment"
+							bind:this={cameraInput}
+							on:change={handleFileSelect}
+							style="display: none"
+						/>
+						<input
+							type="file"
+							accept="image/*"
 							bind:this={fileInput}
 							on:change={handleFileSelect}
 							style="display: none"
