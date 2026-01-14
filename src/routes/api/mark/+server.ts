@@ -124,59 +124,12 @@ async function analyzeStudentAnswer(
 ): Promise<{ score: number; feedback: string; mistakes: string[]; instructions: string | null; usage: TokenUsage }> {
 	const contents: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
 
-	// Build the prompt
-	let promptText = `You are an expert exam marker. Analyze the student's exam paper and provide marking instructions.
+	// Build concise prompt
+	let promptText = `Mark this exam. Model answer: ${modelAnswer}
+Max points: ${maxPoints}
 
-`;
-
-	// Add model answer/rubric
-	promptText += `MODEL ANSWER / RUBRIC:
-${modelAnswer}
-
-MAXIMUM POINTS: ${maxPoints}
-
----
-
-`;
-
-	// Add context files info
-	if (contextFiles.length > 0) {
-		promptText += `REFERENCE MATERIALS (rubric, answer key, marking guide) are attached below.
-
----
-
-`;
-	}
-
-	promptText += `STUDENT ANSWER is attached below.
-
-YOUR TASK:
-1. Read and understand the student's handwritten answer
-2. Compare it to the model answer/rubric and any reference materials
-3. Identify any mistakes or areas for improvement
-4. Assign a score out of ${maxPoints}
-5. Provide brief, constructive feedback
-6. Generate marking instructions for annotating the image
-
-MARKING STYLE - Make it look like natural teacher marking:
-- DO NOT put a tick on every single line - that looks robotic
-- Use VARIED annotation types: circles, underlines, brackets, margin notes
-- Put ONE tick or checkmark for a correct SECTION or PARAGRAPH, not every line
-- Circle or underline KEY TERMS that are correct or incorrect
-- Use margin comments for feedback (e.g., "Good point!", "Needs more detail")
-- Cross out or strike through incorrect parts
-- Write corrections next to errors
-- Put the SCORE in the margin
-
-RESPONSE FORMAT (JSON):
-{
-  "score": <number 0-${maxPoints}>,
-  "feedback": "<brief 1-2 sentence feedback>",
-  "mistakes": ["<mistake 1>", "<mistake 2>", ...],
-  "markingInstructions": "<detailed instructions for marking the image with red annotations, OR null if no marking needed>"
-}
-
-Return ONLY valid JSON, no other text.`;
+Return JSON only:
+{"score":<0-${maxPoints}>,"feedback":"<1 sentence>","mistakes":["<error1>"],"markingInstructions":"<where to circle/underline/tick on the image, or null>"}`;
 
 	contents.push({ text: promptText });
 
@@ -216,7 +169,7 @@ Return ONLY valid JSON, no other text.`;
 		contents: contents,
 		config: {
 			temperature: 0,
-			maxOutputTokens: 4096
+			maxOutputTokens: 512
 		}
 	});
 
@@ -264,23 +217,7 @@ async function markImage(
 		}
 	});
 
-	const markingPrompt = `Mark this student's exam paper with RED annotations like a real teacher would. Follow these instructions:
-
-${instructions}
-
-STYLE RULES - Make it look like natural hand-marking:
-1. PRESERVE all original student work - do NOT erase or cover anything
-2. Only ADD red marks on top of the existing content
-3. Use clear, readable RED ink for all annotations
-4. VARY your mark types - use circles, underlines, brackets, margin notes, not just ticks
-5. DO NOT tick every single line - one tick per correct section/answer is enough
-6. Circle or underline important terms (correct or incorrect)
-7. Use brackets [ ] to group related content
-8. Write SHORT margin comments (e.g., "Good!", "?", "See notes")
-9. Strikethrough wrong answers with a single line
-10. Write scores clearly in the margin
-
-Return the marked image.`;
+	const markingPrompt = `Add RED teacher marks to this exam paper. ${instructions}. Keep original content, only add red annotations.`;
 
 	parts.push({ text: markingPrompt });
 
