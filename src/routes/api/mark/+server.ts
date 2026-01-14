@@ -8,8 +8,8 @@ import { GoogleGenAI } from '@google/genai';
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-const ANALYSIS_MODEL = 'gemini-3-pro-preview';
-const IMAGE_EDIT_MODEL = 'gemini-3-pro-image-preview';
+const ANALYSIS_MODEL = 'gemini-2.0-flash';
+const IMAGE_EDIT_MODEL = 'gemini-2.0-flash-exp-image-generation';
 
 interface ContextFile {
 	name: string;
