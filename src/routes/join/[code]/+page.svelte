@@ -6,24 +6,24 @@
 
 	type SessionWithQuestion = Session & { questions: Question };
 
-	let session = $state<SessionWithQuestion | null>(null);
-	let loading = $state(true);
-	let error = $state('');
-	let step = $state<'name' | 'capture' | 'submitting' | 'result'>('name');
+	let session: SessionWithQuestion | null = null;
+	let loading = true;
+	let error = '';
+	let step: 'name' | 'capture' | 'submitting' | 'result' = 'name';
 
-	let studentName = $state('');
-	let capturedImage = $state<string | null>(null);
+	let studentName = '';
+	let capturedImage: string | null = null;
 	let fileInput: HTMLInputElement;
 
-	let submissionResult = $state<{
+	let submissionResult: {
 		score: number | null;
 		maxScore: number;
 		feedback: string;
 		markedImageUrl: string | null;
 		mistakes: string[];
-	} | null>(null);
+	} | null = null;
 
-	let timeRemaining = $state(0);
+	let timeRemaining = 0;
 	let timerInterval: ReturnType<typeof setInterval> | null = null;
 
 	const code = $page.params.code;
@@ -194,7 +194,7 @@
 					<span>{formatTime(session.questions.time_limit_seconds)} time limit</span>
 				</div>
 
-				<form onsubmit={(e) => { e.preventDefault(); handleNameSubmit(); }}>
+				<form on:submit|preventDefault={handleNameSubmit}>
 					<div class="field">
 						<label for="name">Your Name</label>
 						<input

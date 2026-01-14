@@ -7,10 +7,12 @@
 	import type { Question } from '$lib/types/database';
 	import { nanoid } from 'nanoid';
 
-	let questions = $state<Question[]>([]);
-	let selectedQuestionId = $state('');
-	let loading = $state(true);
-	let creating = $state(false);
+	let questions: Question[] = [];
+	let selectedQuestionId = '';
+	let loading = true;
+	let creating = false;
+
+	$: selectedQuestion = questions.find(q => q.id === selectedQuestionId);
 
 	onMount(async () => {
 		const { data } = await supabase
@@ -51,8 +53,6 @@
 
 		creating = false;
 	}
-
-	const selectedQuestion = $derived(questions.find(q => q.id === selectedQuestionId));
 </script>
 
 <div class="page">
@@ -103,7 +103,7 @@
 			<button
 				class="btn-primary create-btn"
 				disabled={!selectedQuestionId || creating}
-				onclick={createSession}
+				on:click={createSession}
 			>
 				{creating ? 'Creating...' : 'Create Session'}
 			</button>

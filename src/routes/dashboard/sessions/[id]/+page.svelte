@@ -9,14 +9,14 @@
 
 	type SessionWithQuestion = Session & { questions: Question };
 
-	let session = $state<SessionWithQuestion | null>(null);
-	let submissions = $state<Submission[]>([]);
-	let qrCodeUrl = $state('');
-	let loading = $state(true);
+	let session: SessionWithQuestion | null = null;
+	let submissions: Submission[] = [];
+	let qrCodeUrl = '';
+	let loading = true;
 	let subscription: ReturnType<typeof supabase.channel> | null = null;
 
 	const sessionId = $page.params.id;
-	const joinUrl = $derived(`${PUBLIC_APP_URL}/join/${session?.code}`);
+	$: joinUrl = `${PUBLIC_APP_URL}/join/${session?.code}`;
 
 	onMount(async () => {
 		await loadSession();
@@ -109,7 +109,7 @@
 		}
 	}
 
-	const stats = $derived({
+	$: stats = {
 		total: submissions.length,
 		pending: submissions.filter(s => s.status === 'pending').length,
 		marking: submissions.filter(s => s.status === 'marking').length,
@@ -121,7 +121,7 @@
 				submissions.filter(s => s.score !== null).length
 			)
 			: null
-	});
+	};
 </script>
 
 <div class="page">
@@ -142,11 +142,11 @@
 				</div>
 				<div class="session-controls">
 					{#if session.status === 'waiting'}
-						<button class="btn-primary" onclick={startSession}>
+						<button class="btn-primary" on:click={startSession}>
 							Start Session
 						</button>
 					{:else if session.status === 'active'}
-						<button class="btn-danger" onclick={closeSession}>
+						<button class="btn-danger" on:click={closeSession}>
 							Close Session
 						</button>
 					{/if}

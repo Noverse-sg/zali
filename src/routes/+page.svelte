@@ -2,13 +2,11 @@
 	import { goto } from '$app/navigation';
 	import { auth } from '$lib/stores/auth';
 
-	$effect(() => {
-		if ($auth.user) {
-			goto('/dashboard');
-		} else if (!$auth.loading) {
-			goto('/login');
-		}
-	});
+	$: if ($auth.user) {
+		goto('/dashboard');
+	} else if (!$auth.loading) {
+		goto('/login');
+	}
 </script>
 
 <div class="loading-screen">

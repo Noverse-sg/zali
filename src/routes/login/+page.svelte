@@ -3,18 +3,16 @@
 	import { supabase } from '$lib/supabase';
 	import { auth } from '$lib/stores/auth';
 
-	let email = $state('');
-	let password = $state('');
-	let loading = $state(false);
-	let error = $state('');
-	let mode = $state<'login' | 'signup'>('login');
+	let email = '';
+	let password = '';
+	let loading = false;
+	let error = '';
+	let mode: 'login' | 'signup' = 'login';
 
 	// Redirect if already logged in
-	$effect(() => {
-		if ($auth.user) {
-			goto('/dashboard');
-		}
-	});
+	$: if ($auth.user) {
+		goto('/dashboard');
+	}
 
 	async function handleSubmit() {
 		loading = true;
@@ -45,7 +43,7 @@
 			{mode === 'login' ? 'Sign in to manage your quizzes' : 'Start creating interactive quizzes'}
 		</p>
 
-		<form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
+		<form on:submit|preventDefault={handleSubmit}>
 			{#if error}
 				<div class="error-msg">{error}</div>
 			{/if}
@@ -80,7 +78,7 @@
 
 		<p class="toggle-mode">
 			{mode === 'login' ? "Don't have an account?" : 'Already have an account?'}
-			<button class="link-btn" onclick={() => mode = mode === 'login' ? 'signup' : 'login'}>
+			<button class="link-btn" on:click={() => mode = mode === 'login' ? 'signup' : 'login'}>
 				{mode === 'login' ? 'Sign up' : 'Sign in'}
 			</button>
 		</p>

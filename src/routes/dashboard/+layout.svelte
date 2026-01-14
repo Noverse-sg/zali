@@ -3,14 +3,10 @@
 	import { page } from '$app/stores';
 	import { auth } from '$lib/stores/auth';
 
-	let { children } = $props();
-
 	// Redirect if not logged in
-	$effect(() => {
-		if (!$auth.loading && !$auth.user) {
-			goto('/login');
-		}
-	});
+	$: if (!$auth.loading && !$auth.user) {
+		goto('/login');
+	}
 
 	const navItems = [
 		{ href: '/dashboard', label: 'Questions', icon: '?' },
@@ -40,13 +36,13 @@
 					<span class="user-name">{$auth.teacher?.name || 'Teacher'}</span>
 					<span class="user-email">{$auth.user.email}</span>
 				</div>
-				<button class="btn-secondary" onclick={() => auth.signOut()}>
+				<button class="btn-secondary" on:click={() => auth.signOut()}>
 					Sign Out
 				</button>
 			</div>
 		</aside>
 		<main class="content">
-			{@render children()}
+			<slot />
 		</main>
 	</div>
 {/if}

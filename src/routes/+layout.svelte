@@ -3,8 +3,6 @@
 	import { auth } from '$lib/stores/auth';
 	import '../app.css';
 
-	let { children } = $props();
-
 	onMount(() => {
 		auth.init();
 	});
@@ -16,7 +14,7 @@
 		<p>Loading...</p>
 	</div>
 {:else}
-	{@render children()}
+	<slot />
 {/if}
 
 <style>

@@ -4,18 +4,18 @@
 	import { auth } from '$lib/stores/auth';
 	import type { Question } from '$lib/types/database';
 
-	let questions = $state<Question[]>([]);
-	let loading = $state(true);
-	let showModal = $state(false);
-	let editingQuestion = $state<Question | null>(null);
+	let questions: Question[] = [];
+	let loading = true;
+	let showModal = false;
+	let editingQuestion: Question | null = null;
 
 	// Form state
-	let title = $state('');
-	let description = $state('');
-	let modelAnswer = $state('');
-	let maxPoints = $state(10);
-	let timeLimit = $state(300);
-	let saving = $state(false);
+	let title = '';
+	let description = '';
+	let modelAnswer = '';
+	let maxPoints = 10;
+	let timeLimit = 300;
+	let saving = false;
 
 	onMount(loadQuestions);
 
@@ -100,7 +100,7 @@
 			<h1>Questions</h1>
 			<p>Create and manage your question bank</p>
 		</div>
-		<button class="btn-primary" onclick={() => openModal()}>
+		<button class="btn-primary" on:click={() => openModal()}>
 			+ New Question
 		</button>
 	</header>
@@ -111,7 +111,7 @@
 		<div class="empty-state card">
 			<h3>No questions yet</h3>
 			<p>Create your first question to get started</p>
-			<button class="btn-primary" onclick={() => openModal()}>
+			<button class="btn-primary" on:click={() => openModal()}>
 				Create Question
 			</button>
 		</div>
@@ -136,13 +136,13 @@
 					</div>
 				{/if}
 					<div class="question-actions">
-						<button class="btn-secondary" onclick={() => openModal(question)}>
+						<button class="btn-secondary" on:click={() => openModal(question)}>
 							Edit
 						</button>
 						<a href="/dashboard/sessions/new?question={question.id}" class="btn-primary">
 							Start Session
 						</a>
-						<button class="btn-danger" onclick={() => deleteQuestion(question.id)}>
+						<button class="btn-danger" on:click={() => deleteQuestion(question.id)}>
 							Delete
 						</button>
 					</div>
@@ -154,11 +154,11 @@
 
 {#if showModal}
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div class="modal-overlay" onclick={closeModal}>
-		<div class="modal card" onclick={(e) => e.stopPropagation()}>
+	<div class="modal-overlay" on:click={closeModal}>
+		<div class="modal card" on:click={(e) => e.stopPropagation()}>
 			<h2>{editingQuestion ? 'Edit Question' : 'New Question'}</h2>
 
-			<form onsubmit={(e) => { e.preventDefault(); saveQuestion(); }}>
+			<form on:submit|preventDefault={saveQuestion}>
 				<div class="field">
 					<label for="title">Title</label>
 					<input
@@ -217,7 +217,7 @@
 				</div>
 
 				<div class="modal-actions">
-					<button type="button" class="btn-secondary" onclick={closeModal}>
+					<button type="button" class="btn-secondary" on:click={closeModal}>
 						Cancel
 					</button>
 					<button type="submit" class="btn-primary" disabled={saving}>

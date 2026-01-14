@@ -5,8 +5,8 @@
 
 	type SessionWithQuestion = Session & { questions: Question };
 
-	let sessions = $state<SessionWithQuestion[]>([]);
-	let loading = $state(true);
+	let sessions: SessionWithQuestion[] = [];
+	let loading = true;
 
 	onMount(loadSessions);
 

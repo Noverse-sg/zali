@@ -14,9 +14,9 @@
 		commonMistakes: { mistake: string; count: number }[];
 	}
 
-	let sessions = $state<SessionAnalytics[]>([]);
-	let loading = $state(true);
-	let selectedSession = $state<SessionAnalytics | null>(null);
+	let sessions: SessionAnalytics[] = [];
+	let loading = true;
+	let selectedSession: SessionAnalytics | null = null;
 
 	onMount(loadAnalytics);
 
@@ -120,7 +120,7 @@
 					<button
 						class="card session-item"
 						class:selected={selectedSession?.id === session.id}
-						onclick={() => selectedSession = session}
+						on:click={() => selectedSession = session}
 					>
 						<div class="session-header">
 							<strong>{session.questionTitle}</strong>
