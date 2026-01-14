@@ -13,7 +13,8 @@
 
 	let studentName = $state('');
 	let capturedImage = $state<string | null>(null);
-	let fileInput: HTMLInputElement;
+	let cameraInput: HTMLInputElement;
+	let galleryInput: HTMLInputElement;
 
 	let submissionResult = $state<{
 		score: number | null;
@@ -28,6 +29,53 @@
 
 	const code = $page.params.code;
 
+	// LocalStorage key for saving student session
+	const STORAGE_KEY = `zali_session_${code.toUpperCase()}`;
+
+	function saveToStorage() {
+		if (typeof localStorage !== 'undefined') {
+			localStorage.setItem(STORAGE_KEY, JSON.stringify({
+				studentName,
+				step,
+				timeRemaining,
+				capturedImage
+			}));
+		}
+	}
+
+	function loadFromStorage(): boolean {
+		if (typeof localStorage === 'undefined') return false;
+		const saved = localStorage.getItem(STORAGE_KEY);
+		if (saved) {
+			try {
+				const data = JSON.parse(saved);
+				if (data.studentName && data.step) {
+					studentName = data.studentName;
+					// Only restore to capture step, not submitting/result
+					if (data.step === 'capture' || data.step === 'name') {
+						step = data.step;
+						if (data.timeRemaining > 0) {
+							timeRemaining = data.timeRemaining;
+						}
+						if (data.capturedImage) {
+							capturedImage = data.capturedImage;
+						}
+						return true;
+					}
+				}
+			} catch (e) {
+				// Invalid data, ignore
+			}
+		}
+		return false;
+	}
+
+	function clearStorage() {
+		if (typeof localStorage !== 'undefined') {
+			localStorage.removeItem(STORAGE_KEY);
+		}
+	}
+
 	onMount(async () => {
 		const { data } = await supabase
 			.from('sessions')
@@ -39,8 +87,16 @@
 			session = data as SessionWithQuestion;
 			if (session.status === 'closed') {
 				error = 'This session has ended.';
+				clearStorage();
 			} else if (session.status === 'waiting') {
 				error = 'This session has not started yet. Please wait.';
+			} else {
+				// Try to restore previous session
+				const restored = loadFromStorage();
+				if (restored && step === 'capture') {
+					// Resume timer if we were in capture step
+					startTimer();
+				}
 			}
 		} else {
 			error = 'Session not found. Please check the code.';
@@ -51,10 +107,14 @@
 
 	function startTimer() {
 		if (!session) return;
-		timeRemaining = session.questions.time_limit_seconds;
+		// Only reset time if not already set (from localStorage restore)
+		if (timeRemaining <= 0) {
+			timeRemaining = session.questions.time_limit_seconds;
+		}
 
 		timerInterval = setInterval(() => {
 			timeRemaining--;
+			saveToStorage(); // Save remaining time
 			if (timeRemaining <= 0) {
 				if (timerInterval) clearInterval(timerInterval);
 				if (capturedImage) {
@@ -67,6 +127,7 @@
 	function handleNameSubmit() {
 		if (studentName.trim()) {
 			step = 'capture';
+			saveToStorage();
 			startTimer();
 		}
 	}
@@ -78,6 +139,7 @@
 			const reader = new FileReader();
 			reader.onload = (e) => {
 				capturedImage = e.target?.result as string;
+				saveToStorage();
 			};
 			reader.readAsDataURL(file);
 		}
@@ -150,6 +212,7 @@
 				mistakes: result.mistakes || []
 			};
 			step = 'result';
+			clearStorage(); // Clear saved session after successful submission
 		} else {
 			error = result.error || 'Marking failed. Your submission was saved.';
 			step = 'result';
@@ -160,6 +223,7 @@
 				markedImageUrl: null,
 				mistakes: []
 			};
+			clearStorage(); // Clear saved session even on error (submission was created)
 		}
 	}
 
@@ -220,20 +284,41 @@
 				{#if capturedImage}
 					<div class="preview">
 						<img src={capturedImage} alt="Your answer" />
-						<button class="btn-secondary" onclick={() => { capturedImage = null; }}>
+						<button class="btn-secondary" onclick={() => { capturedImage = null; saveToStorage(); }}>
 							Retake
 						</button>
 					</div>
 				{:else}
 					<div class="capture-options">
-						<button class="btn-primary capture-btn" onclick={() => fileInput.click()}>
-							Take Photo / Upload
+						<button class="btn-primary capture-btn" onclick={() => cameraInput.click()}>
+							<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+								<circle cx="12" cy="13" r="3"/>
+							</svg>
+							Take Photo
 						</button>
+						<button class="btn-secondary capture-btn" onclick={() => galleryInput.click()}>
+							<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+								<circle cx="9" cy="9" r="2"/>
+								<path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+							</svg>
+							Upload from Gallery
+						</button>
+						<!-- Camera input - opens camera on mobile -->
 						<input
 							type="file"
 							accept="image/*"
 							capture="environment"
-							bind:this={fileInput}
+							bind:this={cameraInput}
+							onchange={handleFileSelect}
+							style="display: none"
+						/>
+						<!-- Gallery input - opens file picker/gallery -->
+						<input
+							type="file"
+							accept="image/*"
+							bind:this={galleryInput}
 							onchange={handleFileSelect}
 							style="display: none"
 						/>
@@ -423,10 +508,24 @@
 		margin-bottom: 0.5rem;
 	}
 
+	.capture-options {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
 	.capture-btn {
 		width: 100%;
 		padding: 1rem;
 		font-size: 1rem;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.5rem;
+	}
+
+	.capture-btn svg {
+		flex-shrink: 0;
 	}
 
 	.submit-btn {
