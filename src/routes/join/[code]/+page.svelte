@@ -220,13 +220,13 @@
 				{#if capturedImage}
 					<div class="preview">
 						<img src={capturedImage} alt="Your answer" />
-						<button class="btn-secondary" onclick={() => { capturedImage = null; }}>
+						<button class="btn-secondary" on:click={() => { capturedImage = null; }}>
 							Retake
 						</button>
 					</div>
 				{:else}
 					<div class="capture-options">
-						<button class="btn-primary capture-btn" onclick={() => fileInput.click()}>
+						<button class="btn-primary capture-btn" on:click={() => fileInput.click()}>
 							Take Photo / Upload
 						</button>
 						<input
@@ -234,14 +234,14 @@
 							accept="image/*"
 							capture="environment"
 							bind:this={fileInput}
-							onchange={handleFileSelect}
+							on:change={handleFileSelect}
 							style="display: none"
 						/>
 					</div>
 				{/if}
 
 				{#if capturedImage}
-					<button class="btn-primary submit-btn" onclick={submitAnswer}>
+					<button class="btn-primary submit-btn" on:click={submitAnswer}>
 						Submit Answer
 					</button>
 				{/if}
