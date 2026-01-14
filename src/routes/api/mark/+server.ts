@@ -42,57 +42,33 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		console.log(`[Marking] Analysis tokens - prompt: ${analysisResult.usage.promptTokens}, output: ${analysisResult.usage.candidatesTokens}, total: ${analysisResult.usage.totalTokens}`);
 
-		// Step 2: Generate marked image with annotations
-		let markedImageUrl: string | null = null;
-		if (analysisResult.instructions) {
-			try {
-				const markResult = await markImage(imageBase64, analysisResult.instructions);
-				console.log(`[Marking] Image marking tokens - prompt: ${markResult.usage.promptTokens}, output: ${markResult.usage.candidatesTokens}, total: ${markResult.usage.totalTokens}`);
-
-				if (markResult.markedImageBase64) {
-					// Upload marked image to Supabase storage
-					const markedFileName = `marked/${submissionId}_marked.png`;
-					const imageBuffer = Buffer.from(markResult.markedImageBase64, 'base64');
-
-					await supabaseAdmin.storage
-						.from('submissions')
-						.upload(markedFileName, imageBuffer, {
-							contentType: 'image/png',
-							upsert: true
-						});
-
-					const { data: urlData } = supabaseAdmin.storage
-						.from('submissions')
-						.getPublicUrl(markedFileName);
-
-					markedImageUrl = urlData.publicUrl;
-				}
-			} catch (markError) {
-				console.error('[Marking] Image marking failed:', markError);
-				// Continue without marked image
-			}
-		}
-
-		// Update submission with results
+		// Update submission with analysis results immediately (so student sees score fast)
 		await supabaseAdmin
 			.from('submissions')
 			.update({
 				score: analysisResult.score,
 				feedback: analysisResult.feedback,
 				mistakes: analysisResult.mistakes,
-				marked_image_url: markedImageUrl,
 				status: 'completed',
 				marked_at: new Date().toISOString()
 			})
 			.eq('id', submissionId);
 
-		return json({
+		// Return results immediately - don't make student wait for image marking
+		const response = json({
 			success: true,
 			score: analysisResult.score,
 			feedback: analysisResult.feedback,
 			mistakes: analysisResult.mistakes,
-			markedImageUrl
+			markedImageUrl: null // Will be updated async
 		});
+
+		// Step 2: Generate marked image in background (fire and forget)
+		if (analysisResult.instructions) {
+			markImageInBackground(submissionId, imageBase64, analysisResult.instructions);
+		}
+
+		return response;
 	} catch (error) {
 		console.error('[Marking] Error:', error);
 
@@ -335,4 +311,46 @@ Return the marked image.`;
 		markedImageBase64: null,
 		usage
 	};
+}
+
+/**
+ * Run image marking in background - doesn't block the response
+ */
+function markImageInBackground(submissionId: string, imageBase64: string, instructions: string) {
+	// Fire and forget - don't await
+	(async () => {
+		try {
+			console.log(`[Marking] Starting background image marking for ${submissionId}...`);
+			const markResult = await markImage(imageBase64, instructions);
+			console.log(`[Marking] Image marking tokens - prompt: ${markResult.usage.promptTokens}, output: ${markResult.usage.candidatesTokens}, total: ${markResult.usage.totalTokens}`);
+
+			if (markResult.markedImageBase64) {
+				// Upload marked image to Supabase storage
+				const markedFileName = `marked/${submissionId}_marked.png`;
+				const imageBuffer = Buffer.from(markResult.markedImageBase64, 'base64');
+
+				await supabaseAdmin.storage
+					.from('submissions')
+					.upload(markedFileName, imageBuffer, {
+						contentType: 'image/png',
+						upsert: true
+					});
+
+				const { data: urlData } = supabaseAdmin.storage
+					.from('submissions')
+					.getPublicUrl(markedFileName);
+
+				// Update submission with marked image URL
+				await supabaseAdmin
+					.from('submissions')
+					.update({ marked_image_url: urlData.publicUrl })
+					.eq('id', submissionId);
+
+				console.log(`[Marking] Background marking complete for ${submissionId}`);
+			}
+		} catch (error) {
+			console.error(`[Marking] Background marking failed for ${submissionId}:`, error);
+			// Don't throw - this is fire and forget
+		}
+	})();
 }
