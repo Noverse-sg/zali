@@ -125,11 +125,13 @@ async function analyzeStudentAnswer(
 	const contents: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
 
 	// Build concise prompt
-	let promptText = `Mark this exam. Model answer: ${modelAnswer}
-Max points: ${maxPoints}
+	let promptText = `You are marking a student's handwritten exam answer (image attached).
 
-Return JSON only:
-{"score":<0-${maxPoints}>,"feedback":"<1 sentence>","mistakes":["<error1>"],"markingInstructions":"<where to circle/underline/tick on the image, or null>"}`;
+MODEL ANSWER: ${modelAnswer}
+MAX POINTS: ${maxPoints}
+
+Analyze the student's answer in the image and return ONLY this JSON:
+{"score": <number 0-${maxPoints}>, "feedback": "<1-2 sentences>", "mistakes": ["<mistake1>", "<mistake2>"], "markingInstructions": "<brief instructions for red annotations on the image>"}`;
 
 	contents.push({ text: promptText });
 
@@ -169,7 +171,7 @@ Return JSON only:
 		contents: contents,
 		config: {
 			temperature: 0,
-			maxOutputTokens: 512
+			maxOutputTokens: 1024
 		}
 	});
 
