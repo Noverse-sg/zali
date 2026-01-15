@@ -8,8 +8,9 @@ import { GoogleGenAI } from '@google/genai';
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-const ANALYSIS_MODEL = 'gemini-3-pro-preview';
-const IMAGE_EDIT_MODEL = 'gemini-3-pro-image-preview';
+// Use stable Gemini models - gemini-2.5-flash for analysis, gemini-2.0-flash-exp for image generation
+const ANALYSIS_MODEL = 'gemini-2.5-flash';
+const IMAGE_EDIT_MODEL = 'gemini-2.0-flash-exp';
 
 interface ContextFile {
 	name: string;
@@ -23,27 +24,63 @@ interface TokenUsage {
 	totalTokens: number;
 }
 
+// Timeout wrapper for async operations
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<T>((_, reject) =>
+			setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
+		)
+	]);
+}
+
 export const POST: RequestHandler = async ({ request }) => {
+	// Parse request body once at the start
+	let submissionId: string | undefined;
+	let imageBase64: string | undefined;
+	let modelAnswer: string | undefined;
+	let maxPoints: number | undefined;
+	let contextFiles: ContextFile[] = [];
+
 	try {
-		const { submissionId, imageBase64, modelAnswer, maxPoints, contextFiles = [] } = await request.json();
+		const body = await request.json();
+		submissionId = body.submissionId;
+		imageBase64 = body.imageBase64;
+		modelAnswer = body.modelAnswer;
+		maxPoints = body.maxPoints;
+		contextFiles = body.contextFiles || [];
+	} catch (err) {
+		console.error('[Marking] Failed to parse request body:', err);
+		return json({ success: false, error: 'Invalid request body' }, { status: 400 });
+	}
 
-		if (!submissionId || !imageBase64 || !modelAnswer) {
-			return json({ success: false, error: 'Missing required fields' }, { status: 400 });
-		}
+	if (!submissionId || !imageBase64 || !modelAnswer) {
+		return json({ success: false, error: 'Missing required fields' }, { status: 400 });
+	}
 
+	try {
 		// Update submission status to marking
-		await supabaseAdmin
+		const { error: updateError } = await supabaseAdmin
 			.from('submissions')
 			.update({ status: 'marking' })
 			.eq('id', submissionId);
 
+		if (updateError) {
+			console.error('[Marking] Failed to update status to marking:', updateError);
+		}
+
 		// Step 1: Analyze the student's answer and generate marking instructions
-		const analysisResult = await analyzeStudentAnswer(imageBase64, modelAnswer, maxPoints, contextFiles);
+		// Timeout after 60 seconds
+		const analysisResult = await withTimeout(
+			analyzeStudentAnswer(imageBase64, modelAnswer, maxPoints ?? 10, contextFiles),
+			60000,
+			'Analysis'
+		);
 
 		console.log(`[Marking] Analysis tokens - prompt: ${analysisResult.usage.promptTokens}, output: ${analysisResult.usage.candidatesTokens}, total: ${analysisResult.usage.totalTokens}`);
 
 		// Update submission with analysis results immediately
-		await supabaseAdmin
+		const { error: resultError } = await supabaseAdmin
 			.from('submissions')
 			.update({
 				score: analysisResult.score,
@@ -53,6 +90,10 @@ export const POST: RequestHandler = async ({ request }) => {
 				marked_at: new Date().toISOString()
 			})
 			.eq('id', submissionId);
+
+		if (resultError) {
+			console.error('[Marking] Failed to update submission with results:', resultError);
+		}
 
 		// Step 2: Generate marked image in background (don't block response)
 		if (analysisResult.instructions) {
@@ -67,15 +108,22 @@ export const POST: RequestHandler = async ({ request }) => {
 			markedImageUrl: null // Will be updated async
 		});
 	} catch (error) {
-		console.error('[Marking] Error:', error);
+		const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+		console.error('[Marking] Error:', errorMessage);
 
 		// Update submission status to error
-		const { submissionId } = await request.json().catch(() => ({}));
 		if (submissionId) {
-			await supabaseAdmin
+			const { error: statusError } = await supabaseAdmin
 				.from('submissions')
-				.update({ status: 'error' })
+				.update({
+					status: 'error',
+					feedback: `Marking failed: ${errorMessage}`
+				})
 				.eq('id', submissionId);
+
+			if (statusError) {
+				console.error('[Marking] Failed to update error status:', statusError);
+			}
 		}
 
 		return json(
@@ -87,7 +135,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 /**
  * STEP 1: Analyze student answer and generate marking instructions
- * Sends student image + context files to Gemini 3 Pro
+ * Sends student image + context files to Gemini for analysis
  */
 async function analyzeStudentAnswer(
 	imageBase64: string,
@@ -138,18 +186,30 @@ Analyze the student's answer in the image and return ONLY this JSON:
 		}
 	});
 
-	console.log('[Marking] Calling Gemini 3 Pro for analysis...');
-	const response = await genAI.models.generateContent({
-		model: ANALYSIS_MODEL,
-		contents: contents,
-		config: {
-			temperature: 0,
-			maxOutputTokens: 1024
-		}
-	});
+	console.log(`[Marking] Calling ${ANALYSIS_MODEL} for analysis...`);
+
+	let response;
+	try {
+		response = await genAI.models.generateContent({
+			model: ANALYSIS_MODEL,
+			contents: contents,
+			config: {
+				temperature: 0,
+				maxOutputTokens: 1024
+			}
+		});
+	} catch (apiError) {
+		console.error('[Marking] Gemini API error:', apiError);
+		throw new Error(`Gemini API call failed: ${apiError instanceof Error ? apiError.message : 'Unknown error'}`);
+	}
+
+	console.log('[Marking] Response received:', JSON.stringify(response).slice(0, 500));
 
 	const text = response.text || '';
-	if (!text) throw new Error('No response from analysis model');
+	if (!text) {
+		console.error('[Marking] Empty response from model. Full response:', JSON.stringify(response));
+		throw new Error('No response from analysis model');
+	}
 
 	// Extract token usage from response
 	const usageMetadata = response.usageMetadata;
@@ -196,7 +256,7 @@ async function markImage(
 
 	parts.push({ text: markingPrompt });
 
-	console.log('[Marking] Calling Gemini 3 Pro Image for marking...');
+	console.log(`[Marking] Calling ${IMAGE_EDIT_MODEL} for image marking...`);
 	const response = await fetch(
 		`https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_EDIT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
 		{
@@ -251,38 +311,74 @@ async function markImage(
 
 /**
  * Background image marking - runs async without blocking response
+ * Includes retry logic for transient failures
  */
 function markImageInBackground(submissionId: string, imageBase64: string, instructions: string) {
+	const MAX_RETRIES = 2;
+	const RETRY_DELAY = 3000; // 3 seconds
+
 	// Run without awaiting - fire and forget
 	(async () => {
-		try {
-			console.log(`[Marking] Starting background image marking for ${submissionId}`);
-			const markResult = await markImage(imageBase64, instructions);
+		let lastError: Error | null = null;
 
-			if (markResult.markedImageBase64) {
-				const markedFileName = `marked/${submissionId}_marked.png`;
-				const imageBuffer = Buffer.from(markResult.markedImageBase64, 'base64');
+		for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+			try {
+				console.log(`[Marking] Starting background image marking for ${submissionId} (attempt ${attempt}/${MAX_RETRIES})`);
 
-				await supabaseAdmin.storage
-					.from('submissions')
-					.upload(markedFileName, imageBuffer, {
-						contentType: 'image/png',
-						upsert: true
-					});
+				// Add timeout for the marking operation (90 seconds)
+				const markResult = await withTimeout(
+					markImage(imageBase64, instructions),
+					90000,
+					'Image marking'
+				);
 
-				const { data: urlData } = supabaseAdmin.storage
-					.from('submissions')
-					.getPublicUrl(markedFileName);
+				if (markResult.markedImageBase64) {
+					const markedFileName = `marked/${submissionId}_marked.png`;
+					const imageBuffer = Buffer.from(markResult.markedImageBase64, 'base64');
 
-				await supabaseAdmin
-					.from('submissions')
-					.update({ marked_image_url: urlData.publicUrl })
-					.eq('id', submissionId);
+					const { error: uploadError } = await supabaseAdmin.storage
+						.from('submissions')
+						.upload(markedFileName, imageBuffer, {
+							contentType: 'image/png',
+							upsert: true
+						});
 
-				console.log(`[Marking] Background marking complete for ${submissionId}`);
+					if (uploadError) {
+						throw new Error(`Storage upload failed: ${uploadError.message}`);
+					}
+
+					const { data: urlData } = supabaseAdmin.storage
+						.from('submissions')
+						.getPublicUrl(markedFileName);
+
+					const { error: updateError } = await supabaseAdmin
+						.from('submissions')
+						.update({ marked_image_url: urlData.publicUrl })
+						.eq('id', submissionId);
+
+					if (updateError) {
+						console.error(`[Marking] Failed to update marked_image_url for ${submissionId}:`, updateError);
+					}
+
+					console.log(`[Marking] Background marking complete for ${submissionId}`);
+					console.log(`[Marking] Image marking tokens - prompt: ${markResult.usage.promptTokens}, output: ${markResult.usage.candidatesTokens}`);
+					return; // Success - exit the retry loop
+				} else {
+					console.warn(`[Marking] No marked image returned for ${submissionId}`);
+					return; // No image but no error - don't retry
+				}
+			} catch (err) {
+				lastError = err instanceof Error ? err : new Error(String(err));
+				console.error(`[Marking] Background marking attempt ${attempt} failed for ${submissionId}:`, lastError.message);
+
+				if (attempt < MAX_RETRIES) {
+					console.log(`[Marking] Retrying in ${RETRY_DELAY}ms...`);
+					await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+				}
 			}
-		} catch (err) {
-			console.error(`[Marking] Background marking failed for ${submissionId}:`, err);
 		}
+
+		// All retries exhausted
+		console.error(`[Marking] Background marking failed after ${MAX_RETRIES} attempts for ${submissionId}:`, lastError?.message);
 	})();
 }

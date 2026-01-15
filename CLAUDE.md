@@ -11,6 +11,7 @@ Zali is an AI-powered exam marking application for teachers. Teachers create que
 ```bash
 npm run dev          # Start development server (Vite)
 npm run build        # Build for production
+npm run start        # Run production server (requires build first)
 npm run preview      # Preview production build
 npm run check        # Run svelte-check for type checking
 npm run check:watch  # Run svelte-check in watch mode
@@ -18,12 +19,12 @@ npm run check:watch  # Run svelte-check in watch mode
 
 ## Tech Stack
 
-- **Framework**: SvelteKit 2 with Svelte 5
+- **Framework**: SvelteKit 2 with Svelte 4
 - **Database/Auth**: Supabase (PostgreSQL with RLS policies)
 - **AI**: Google Gemini API
-  - `gemini-3-pro-preview` - Analysis model for reading student answers and generating marking instructions
-  - `gemini-3-pro-image-preview` - Image edit model for adding red annotations
-- **Build**: Vite 7
+  - `gemini-2.5-flash` - Analysis model for reading student answers and generating marking instructions
+  - `gemini-2.0-flash-exp` - Image edit model for adding red annotations
+- **Build**: Vite 5
 
 ## Architecture
 

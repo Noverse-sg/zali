@@ -7,17 +7,33 @@
 
 	let sessions: SessionWithQuestion[] = [];
 	let loading = true;
+	let loadError = '';
 
 	onMount(loadSessions);
 
 	async function loadSessions() {
 		loading = true;
-		const { data } = await supabase
-			.from('sessions')
-			.select('*, questions(*)')
-			.order('created_at', { ascending: false });
+		loadError = '';
 
-		sessions = (data as SessionWithQuestion[]) || [];
+		try {
+			const { data, error } = await supabase
+				.from('sessions')
+				.select('*, questions(*)')
+				.order('created_at', { ascending: false });
+
+			if (error) {
+				console.error('Failed to load sessions:', error);
+				loadError = 'Failed to load sessions. Please try again.';
+				loading = false;
+				return;
+			}
+
+			sessions = (data as SessionWithQuestion[]) || [];
+		} catch (err) {
+			console.error('Error loading sessions:', err);
+			loadError = 'An unexpected error occurred. Please try again.';
+		}
+
 		loading = false;
 	}
 
@@ -53,6 +69,12 @@
 
 	{#if loading}
 		<div class="loading">Loading sessions...</div>
+	{:else if loadError}
+		<div class="error-state card">
+			<h3>Error</h3>
+			<p>{loadError}</p>
+			<button class="btn-primary" on:click={loadSessions}>Try Again</button>
+		</div>
 	{:else if sessions.length === 0}
 		<div class="empty-state card">
 			<h3>No sessions yet</h3>
@@ -109,18 +131,22 @@
 		color: white;
 	}
 
-	.loading, .empty-state {
+	.loading, .empty-state, .error-state {
 		text-align: center;
 		padding: 3rem;
 	}
 
-	.empty-state h3 {
+	.empty-state h3, .error-state h3 {
 		margin-bottom: 0.5rem;
 	}
 
-	.empty-state p {
+	.empty-state p, .error-state p {
 		color: var(--gray-500);
 		margin-bottom: 1rem;
+	}
+
+	.error-state h3 {
+		color: var(--error);
 	}
 
 	.empty-state a {

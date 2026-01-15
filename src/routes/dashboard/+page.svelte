@@ -6,6 +6,7 @@
 
 	let questions: Question[] = [];
 	let loading = true;
+	let loadError = '';
 	let showModal = false;
 	let editingQuestion: Question | null = null;
 
@@ -16,17 +17,33 @@
 	let maxPoints = 10;
 	let timeLimit = 300;
 	let saving = false;
+	let saveError = '';
 
 	onMount(loadQuestions);
 
 	async function loadQuestions() {
 		loading = true;
-		const { data } = await supabase
-			.from('questions')
-			.select('*')
-			.order('created_at', { ascending: false });
+		loadError = '';
 
-		questions = data || [];
+		try {
+			const { data, error } = await supabase
+				.from('questions')
+				.select('*')
+				.order('created_at', { ascending: false });
+
+			if (error) {
+				console.error('Failed to load questions:', error);
+				loadError = 'Failed to load questions. Please try again.';
+				loading = false;
+				return;
+			}
+
+			questions = data || [];
+		} catch (err) {
+			console.error('Error loading questions:', err);
+			loadError = 'An unexpected error occurred. Please try again.';
+		}
+
 		loading = false;
 	}
 
@@ -57,6 +74,7 @@
 	async function saveQuestion() {
 		if (!$auth.user) return;
 		saving = true;
+		saveError = '';
 
 		const questionData = {
 			teacher_id: $auth.user.id,
@@ -67,24 +85,57 @@
 			time_limit_seconds: timeLimit
 		};
 
-		if (editingQuestion) {
-			await supabase
-				.from('questions')
-				.update({ ...questionData, updated_at: new Date().toISOString() })
-				.eq('id', editingQuestion.id);
-		} else {
-			await supabase.from('questions').insert(questionData);
-		}
+		try {
+			if (editingQuestion) {
+				const { error } = await supabase
+					.from('questions')
+					.update({ ...questionData, updated_at: new Date().toISOString() })
+					.eq('id', editingQuestion.id);
 
-		saving = false;
-		closeModal();
-		loadQuestions();
+				if (error) {
+					console.error('Failed to update question:', error);
+					saveError = 'Failed to save question. Please try again.';
+					saving = false;
+					return;
+				}
+			} else {
+				const { error } = await supabase.from('questions').insert(questionData);
+
+				if (error) {
+					console.error('Failed to create question:', error);
+					saveError = 'Failed to create question. Please try again.';
+					saving = false;
+					return;
+				}
+			}
+
+			saving = false;
+			closeModal();
+			loadQuestions();
+		} catch (err) {
+			console.error('Error saving question:', err);
+			saveError = 'An unexpected error occurred. Please try again.';
+			saving = false;
+		}
 	}
 
 	async function deleteQuestion(id: string) {
 		if (!confirm('Delete this question?')) return;
-		await supabase.from('questions').delete().eq('id', id);
-		loadQuestions();
+
+		try {
+			const { error } = await supabase.from('questions').delete().eq('id', id);
+
+			if (error) {
+				console.error('Failed to delete question:', error);
+				alert('Failed to delete question. Please try again.');
+				return;
+			}
+
+			loadQuestions();
+		} catch (err) {
+			console.error('Error deleting question:', err);
+			alert('An unexpected error occurred. Please try again.');
+		}
 	}
 
 	function formatTime(seconds: number): string {
@@ -107,6 +158,12 @@
 
 	{#if loading}
 		<div class="loading">Loading questions...</div>
+	{:else if loadError}
+		<div class="error-state card">
+			<h3>Error</h3>
+			<p>{loadError}</p>
+			<button class="btn-primary" on:click={loadQuestions}>Try Again</button>
+		</div>
 	{:else if questions.length === 0}
 		<div class="empty-state card">
 			<h3>No questions yet</h3>
@@ -216,6 +273,10 @@
 					</div>
 				</div>
 
+				{#if saveError}
+					<div class="save-error">{saveError}</div>
+				{/if}
+
 				<div class="modal-actions">
 					<button type="button" class="btn-secondary" on:click={closeModal}>
 						Cancel
@@ -247,17 +308,30 @@
 		font-size: 0.875rem;
 	}
 
-	.loading, .empty-state {
+	.loading, .empty-state, .error-state {
 		text-align: center;
 		padding: 3rem;
 	}
 
-	.empty-state h3 {
+	.empty-state h3, .error-state h3 {
 		margin-bottom: 0.5rem;
 	}
 
-	.empty-state p {
+	.empty-state p, .error-state p {
 		color: var(--gray-500);
+		margin-bottom: 1rem;
+	}
+
+	.error-state h3 {
+		color: var(--error);
+	}
+
+	.save-error {
+		color: var(--error);
+		font-size: 0.875rem;
+		padding: 0.5rem;
+		background: #fee2e2;
+		border-radius: 0.375rem;
 		margin-bottom: 1rem;
 	}
 

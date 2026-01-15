@@ -4,6 +4,7 @@
 	import { page } from '$app/stores';
 	import { supabase } from '$lib/supabase';
 	import type { Session, Question, Submission } from '$lib/types/database';
+	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import QRCode from 'qrcode';
 	import { PUBLIC_APP_URL } from '$env/static/public';
 
@@ -13,53 +14,92 @@
 	let submissions: Submission[] = [];
 	let qrCodeUrl = '';
 	let loading = true;
-	let subscription: ReturnType<typeof supabase.channel> | null = null;
+	let loadError = '';
+	let subscription: RealtimeChannel | null = null;
+	let subscriptionStatus: 'connecting' | 'connected' | 'error' = 'connecting';
+	let retryCount = 0;
+	const MAX_RETRIES = 3;
 
 	const sessionId = $page.params.id;
 	$: joinUrl = `${PUBLIC_APP_URL}/join/${session?.code}`;
 
 	onMount(async () => {
 		await loadSession();
-		await loadSubmissions();
-		setupRealtimeSubscription();
+		if (session) {
+			await loadSubmissions();
+			setupRealtimeSubscription();
+		}
 		loading = false;
 	});
 
 	onDestroy(() => {
-		subscription?.unsubscribe();
+		if (subscription) {
+			subscription.unsubscribe();
+			subscription = null;
+		}
 	});
 
 	async function loadSession() {
-		const { data } = await supabase
-			.from('sessions')
-			.select('*, questions(*)')
-			.eq('id', sessionId)
-			.single();
+		try {
+			const { data, error } = await supabase
+				.from('sessions')
+				.select('*, questions(*)')
+				.eq('id', sessionId)
+				.single();
 
-		session = data as SessionWithQuestion;
+			if (error) {
+				console.error('Failed to load session:', error);
+				loadError = 'Failed to load session. Please try again.';
+				return;
+			}
 
-		if (session) {
-			qrCodeUrl = await QRCode.toDataURL(joinUrl, {
-				width: 300,
-				margin: 2,
-				color: { dark: '#000000', light: '#ffffff' }
-			});
+			session = data as SessionWithQuestion;
+
+			if (session) {
+				try {
+					qrCodeUrl = await QRCode.toDataURL(joinUrl, {
+						width: 300,
+						margin: 2,
+						color: { dark: '#000000', light: '#ffffff' }
+					});
+				} catch (err) {
+					console.error('Failed to generate QR code:', err);
+				}
+			}
+		} catch (err) {
+			console.error('Error loading session:', err);
+			loadError = 'Failed to load session. Please try again.';
 		}
 	}
 
 	async function loadSubmissions() {
-		const { data } = await supabase
-			.from('submissions')
-			.select('*')
-			.eq('session_id', sessionId)
-			.order('submitted_at', { ascending: false });
+		try {
+			const { data, error } = await supabase
+				.from('submissions')
+				.select('*')
+				.eq('session_id', sessionId)
+				.order('submitted_at', { ascending: false });
 
-		submissions = data || [];
+			if (error) {
+				console.error('Failed to load submissions:', error);
+				return;
+			}
+
+			submissions = data || [];
+		} catch (err) {
+			console.error('Error loading submissions:', err);
+		}
 	}
 
 	function setupRealtimeSubscription() {
+		if (subscription) {
+			subscription.unsubscribe();
+		}
+
+		subscriptionStatus = 'connecting';
+
 		subscription = supabase
-			.channel(`session-${sessionId}`)
+			.channel(`session-${sessionId}-${Date.now()}`)
 			.on(
 				'postgres_changes',
 				{
@@ -69,6 +109,7 @@
 					filter: `session_id=eq.${sessionId}`
 				},
 				(payload) => {
+					console.log('[Realtime] Received update:', payload.eventType);
 					if (payload.eventType === 'INSERT') {
 						submissions = [payload.new as Submission, ...submissions];
 					} else if (payload.eventType === 'UPDATE') {
@@ -78,25 +119,71 @@
 					}
 				}
 			)
-			.subscribe();
+			.subscribe((status) => {
+				console.log('[Realtime] Subscription status:', status);
+				if (status === 'SUBSCRIBED') {
+					subscriptionStatus = 'connected';
+					retryCount = 0;
+				} else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+					subscriptionStatus = 'error';
+					// Retry with exponential backoff
+					if (retryCount < MAX_RETRIES) {
+						retryCount++;
+						const delay = Math.pow(2, retryCount) * 1000;
+						console.log(`[Realtime] Retrying in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})`);
+						setTimeout(() => setupRealtimeSubscription(), delay);
+					}
+				}
+			});
 	}
 
 	async function startSession() {
 		if (!session) return;
-		await supabase
-			.from('sessions')
-			.update({ status: 'active', started_at: new Date().toISOString() })
-			.eq('id', sessionId);
-		await loadSession();
+		try {
+			const { error } = await supabase
+				.from('sessions')
+				.update({ status: 'active', started_at: new Date().toISOString() })
+				.eq('id', sessionId);
+
+			if (error) {
+				console.error('Failed to start session:', error);
+				alert('Failed to start session. Please try again.');
+				return;
+			}
+			await loadSession();
+		} catch (err) {
+			console.error('Error starting session:', err);
+			alert('Failed to start session. Please try again.');
+		}
 	}
 
 	async function closeSession() {
 		if (!session) return;
-		await supabase
-			.from('sessions')
-			.update({ status: 'closed', closed_at: new Date().toISOString() })
-			.eq('id', sessionId);
-		await loadSession();
+		try {
+			const { error } = await supabase
+				.from('sessions')
+				.update({ status: 'closed', closed_at: new Date().toISOString() })
+				.eq('id', sessionId);
+
+			if (error) {
+				console.error('Failed to close session:', error);
+				alert('Failed to close session. Please try again.');
+				return;
+			}
+			await loadSession();
+		} catch (err) {
+			console.error('Error closing session:', err);
+			alert('Failed to close session. Please try again.');
+		}
+	}
+
+	function refreshSubmissions() {
+		loadSubmissions();
+		// Also try to reconnect subscription if it failed
+		if (subscriptionStatus === 'error') {
+			retryCount = 0;
+			setupRealtimeSubscription();
+		}
 	}
 
 	function getStatusColor(status: string) {
@@ -127,6 +214,15 @@
 <div class="page">
 	{#if loading}
 		<div class="loading">Loading session...</div>
+	{:else if loadError}
+		<div class="error card">
+			<h3>Error</h3>
+			<p>{loadError}</p>
+			<button class="btn-primary" on:click={() => { loadError = ''; loading = true; loadSession().then(() => { loading = false; }); }}>
+				Try Again
+			</button>
+			<a href="/dashboard/sessions" class="btn-secondary">Back to Sessions</a>
+		</div>
 	{:else if !session}
 		<div class="error card">
 			<h3>Session not found</h3>
@@ -196,7 +292,21 @@
 		</div>
 
 		<div class="card submissions-section">
-			<h2>Submissions ({submissions.length})</h2>
+			<div class="submissions-header">
+				<h2>Submissions ({submissions.length})</h2>
+				<div class="submissions-controls">
+					{#if subscriptionStatus === 'error'}
+						<span class="connection-status error">Live updates disconnected</span>
+					{:else if subscriptionStatus === 'connecting'}
+						<span class="connection-status connecting">Connecting...</span>
+					{:else}
+						<span class="connection-status connected">Live</span>
+					{/if}
+					<button class="btn-secondary btn-small" on:click={refreshSubmissions}>
+						Refresh
+					</button>
+				</div>
+			</div>
 			{#if submissions.length === 0}
 				<p class="no-submissions">No submissions yet. Waiting for students...</p>
 			{:else}
@@ -314,10 +424,55 @@
 		text-align: center;
 	}
 
-	.qr-section h2, .stats-section h2, .submissions-section h2 {
+	.qr-section h2, .stats-section h2 {
 		font-size: 1rem;
 		margin-bottom: 1rem;
 		color: var(--gray-700);
+	}
+
+	.submissions-section h2 {
+		font-size: 1rem;
+		margin-bottom: 0;
+		color: var(--gray-700);
+	}
+
+	.submissions-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 1rem;
+	}
+
+	.submissions-controls {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.connection-status {
+		font-size: 0.75rem;
+		padding: 0.25rem 0.5rem;
+		border-radius: 9999px;
+	}
+
+	.connection-status.connected {
+		background: #dcfce7;
+		color: #166534;
+	}
+
+	.connection-status.connecting {
+		background: #fef3c7;
+		color: #92400e;
+	}
+
+	.connection-status.error {
+		background: #fee2e2;
+		color: #991b1b;
+	}
+
+	.btn-small {
+		padding: 0.25rem 0.75rem;
+		font-size: 0.75rem;
 	}
 
 	.join-url {
