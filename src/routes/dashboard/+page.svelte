@@ -1,12 +1,16 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/stores/auth';
+	import { invalidateAll } from '$app/navigation';
+	import type { PageData } from './$types';
 	import type { Question } from '$lib/types/database';
 
-	let questions: Question[] = [];
-	let loading = true;
-	let loadError = '';
+	export let data: PageData;
+
+	// Use supabase client from layout (has auth session)
+	$: ({ supabase } = data);
+
+	// Reactive questions from server data
+	$: questions = data.questions as Question[];
+
 	let showModal = false;
 	let editingQuestion: Question | null = null;
 
@@ -18,34 +22,6 @@
 	let timeLimit = 300;
 	let saving = false;
 	let saveError = '';
-
-	onMount(loadQuestions);
-
-	async function loadQuestions() {
-		loading = true;
-		loadError = '';
-
-		try {
-			const { data, error } = await supabase
-				.from('questions')
-				.select('*')
-				.order('created_at', { ascending: false });
-
-			if (error) {
-				console.error('Failed to load questions:', error);
-				loadError = 'Failed to load questions. Please try again.';
-				loading = false;
-				return;
-			}
-
-			questions = data || [];
-		} catch (err) {
-			console.error('Error loading questions:', err);
-			loadError = 'An unexpected error occurred. Please try again.';
-		}
-
-		loading = false;
-	}
 
 	function openModal(question?: Question) {
 		if (question) {
@@ -69,15 +45,16 @@
 	function closeModal() {
 		showModal = false;
 		editingQuestion = null;
+		saveError = '';
 	}
 
 	async function saveQuestion() {
-		if (!$auth.user) return;
+		if (!data.user) return;
 		saving = true;
 		saveError = '';
 
 		const questionData = {
-			teacher_id: $auth.user.id,
+			teacher_id: data.user.id,
 			title,
 			description: description || null,
 			model_answer: modelAnswer,
@@ -111,7 +88,8 @@
 
 			saving = false;
 			closeModal();
-			loadQuestions();
+			// Refresh data from server
+			invalidateAll();
 		} catch (err) {
 			console.error('Error saving question:', err);
 			saveError = 'An unexpected error occurred. Please try again.';
@@ -131,7 +109,8 @@
 				return;
 			}
 
-			loadQuestions();
+			// Refresh data from server
+			invalidateAll();
 		} catch (err) {
 			console.error('Error deleting question:', err);
 			alert('An unexpected error occurred. Please try again.');
@@ -156,15 +135,7 @@
 		</button>
 	</header>
 
-	{#if loading}
-		<div class="loading">Loading questions...</div>
-	{:else if loadError}
-		<div class="error-state card">
-			<h3>Error</h3>
-			<p>{loadError}</p>
-			<button class="btn-primary" on:click={loadQuestions}>Try Again</button>
-		</div>
-	{:else if questions.length === 0}
+	{#if questions.length === 0}
 		<div class="empty-state card">
 			<h3>No questions yet</h3>
 			<p>Create your first question to get started</p>
@@ -308,22 +279,18 @@
 		font-size: 0.875rem;
 	}
 
-	.loading, .empty-state, .error-state {
+	.empty-state {
 		text-align: center;
 		padding: 3rem;
 	}
 
-	.empty-state h3, .error-state h3 {
+	.empty-state h3 {
 		margin-bottom: 0.5rem;
 	}
 
-	.empty-state p, .error-state p {
+	.empty-state p {
 		color: var(--gray-500);
 		margin-bottom: 1rem;
-	}
-
-	.error-state h3 {
-		color: var(--error);
 	}
 
 	.save-error {

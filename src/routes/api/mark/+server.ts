@@ -8,9 +8,9 @@ import { GoogleGenAI } from '@google/genai';
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-// Use stable Gemini models - gemini-2.5-flash for analysis, gemini-2.0-flash-exp for image generation
-const ANALYSIS_MODEL = 'gemini-2.5-flash';
-const IMAGE_EDIT_MODEL = 'gemini-2.0-flash-exp';
+// Use Gemini 3 models for analysis and image marking
+const ANALYSIS_MODEL = 'gemini-3-flash-preview';
+const IMAGE_EDIT_MODEL = 'gemini-3-pro-image-preview';
 
 interface ContextFile {
 	name: string;
@@ -192,11 +192,7 @@ Analyze the student's answer in the image and return ONLY this JSON:
 	try {
 		response = await genAI.models.generateContent({
 			model: ANALYSIS_MODEL,
-			contents: contents,
-			config: {
-				temperature: 0,
-				maxOutputTokens: 1024
-			}
+			contents: contents
 		});
 	} catch (apiError) {
 		console.error('[Marking] Gemini API error:', apiError);

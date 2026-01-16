@@ -1,57 +1,53 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
-	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/stores/auth';
+	import type { PageData } from './$types';
 	import type { Question } from '$lib/types/database';
 	import { nanoid } from 'nanoid';
 
-	let questions: Question[] = [];
-	let selectedQuestionId = '';
-	let loading = true;
+	export let data: PageData;
+
+	// Use supabase client from layout (has auth session)
+	$: ({ supabase } = data);
+
+	$: questions = data.questions as Question[];
+
+	let selectedQuestionId = data.preselectedQuestionId || '';
 	let creating = false;
+	let createError = '';
 
 	$: selectedQuestion = questions.find(q => q.id === selectedQuestionId);
 
-	onMount(async () => {
-		const { data } = await supabase
-			.from('questions')
-			.select('*')
-			.order('created_at', { ascending: false });
-
-		questions = data || [];
-		loading = false;
-
-		// Pre-select question from URL param
-		const questionParam = $page.url.searchParams.get('question');
-		if (questionParam && questions.find(q => q.id === questionParam)) {
-			selectedQuestionId = questionParam;
-		}
-	});
-
 	async function createSession() {
-		if (!$auth.user || !selectedQuestionId) return;
+		if (!data.user || !selectedQuestionId) return;
 
 		creating = true;
+		createError = '';
 		const code = nanoid(6).toUpperCase();
 
-		const { data, error } = await supabase
-			.from('sessions')
-			.insert({
-				teacher_id: $auth.user.id,
-				question_id: selectedQuestionId,
-				code,
-				status: 'waiting'
-			})
-			.select()
-			.single();
+		try {
+			const { data: session, error } = await supabase
+				.from('sessions')
+				.insert({
+					teacher_id: data.user.id,
+					question_id: selectedQuestionId,
+					code,
+					status: 'waiting'
+				})
+				.select()
+				.single();
 
-		if (data && !error) {
-			goto(`/dashboard/sessions/${data.id}`);
+			if (session && !error) {
+				// Full page navigation to ensure server has proper auth context
+				window.location.href = `/dashboard/sessions/${session.id}`;
+			} else {
+				console.error('Failed to create session:', error);
+				createError = 'Failed to create session. Please try again.';
+				creating = false;
+			}
+		} catch (err) {
+			console.error('Error creating session:', err);
+			createError = 'An unexpected error occurred. Please try again.';
+			creating = false;
 		}
-
-		creating = false;
 	}
 </script>
 
@@ -62,9 +58,7 @@
 		<p>Select a question to start a live session</p>
 	</header>
 
-	{#if loading}
-		<div class="loading">Loading questions...</div>
-	{:else if questions.length === 0}
+	{#if questions.length === 0}
 		<div class="empty-state card">
 			<h3>No questions available</h3>
 			<p>Create a question first before starting a session</p>
@@ -98,6 +92,10 @@
 						</div>
 					</div>
 				</div>
+			{/if}
+
+			{#if createError}
+				<div class="create-error">{createError}</div>
 			{/if}
 
 			<button
@@ -138,7 +136,7 @@
 		font-size: 0.875rem;
 	}
 
-	.loading, .empty-state {
+	.empty-state {
 		text-align: center;
 		padding: 3rem;
 	}
@@ -217,6 +215,15 @@
 		overflow-x: auto;
 		white-space: pre-wrap;
 		color: var(--gray-600);
+	}
+
+	.create-error {
+		color: var(--error);
+		font-size: 0.875rem;
+		padding: 0.5rem;
+		background: #fee2e2;
+		border-radius: 0.375rem;
+		margin-bottom: 1rem;
 	}
 
 	.create-btn {

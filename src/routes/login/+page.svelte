@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/stores/auth';
+	import type { PageData } from './$types';
+
+	export let data: PageData;
+
+	$: ({ supabase } = data);
 
 	let email = '';
 	let password = '';
@@ -10,7 +13,7 @@
 	let mode: 'login' | 'signup' = 'login';
 
 	// Redirect if already logged in
-	$: if ($auth.user) {
+	$: if (data.user) {
 		goto('/dashboard');
 	}
 
@@ -20,19 +23,27 @@
 
 		if (mode === 'login') {
 			const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-			if (err) error = err.message;
-			else goto('/dashboard');
+			if (err) {
+				error = err.message;
+				loading = false;
+			} else {
+				// Full page navigation to ensure server gets new session cookies
+				window.location.href = '/dashboard';
+			}
 		} else {
 			const { error: err } = await supabase.auth.signUp({
 				email,
 				password,
 				options: { data: { name: email.split('@')[0] } }
 			});
-			if (err) error = err.message;
-			else goto('/dashboard');
+			if (err) {
+				error = err.message;
+				loading = false;
+			} else {
+				// Full page navigation to ensure server gets new session cookies
+				window.location.href = '/dashboard';
+			}
 		}
-
-		loading = false;
 	}
 </script>
 

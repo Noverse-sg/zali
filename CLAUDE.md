@@ -20,74 +20,91 @@ npm run check:watch  # Run svelte-check in watch mode
 ## Tech Stack
 
 - **Framework**: SvelteKit 2 with Svelte 4
-- **Database/Auth**: Supabase (PostgreSQL with RLS policies)
-- **AI**: Google Gemini API
-  - `gemini-2.5-flash` - Analysis model for reading student answers and generating marking instructions
-  - `gemini-2.0-flash-exp` - Image edit model for adding red annotations
+- **Database/Auth**: Supabase (PostgreSQL with RLS policies, `@supabase/ssr` for SSR)
+- **AI**: Google Gemini API (`@google/genai` SDK)
+  - `gemini-3-flash-preview` - Analysis model for reading student answers
+  - `gemini-3-pro-image-preview` - Image generation model for red annotations
 - **Build**: Vite 5
 
 ## Architecture
 
+### SSR Pattern
+
+This app uses SvelteKit's server-side rendering pattern:
+- **`+page.server.ts`** files load data on the server (not `onMount`)
+- **`hooks.server.ts`** handles auth validation via `supabase.auth.getUser()` on every request
+- **`+layout.ts`** creates the Supabase client for client-side use
+- Session/user data flows from server → layout → pages via `data` prop
+
 ### Data Flow
+
 1. Teachers authenticate via Supabase Auth → creates entry in `teachers` table via trigger
 2. Teachers create questions with model answers in the `questions` table
 3. Teachers start sessions with 6-character join codes (`sessions` table)
 4. Students join via `/join/[code]`, upload handwritten answer images
-5. Marking API processes the submission (see AI Marking Pipeline below)
+5. Marking API processes submission in two steps (analysis → image marking)
 6. Results stored in `submissions` table, marked images in Supabase Storage
+7. Real-time updates via Supabase Realtime subscriptions
 
 ### AI Marking Pipeline
 
-The marking system uses a two-step process with different Gemini models:
+Two-step process in `/api/mark`:
 
-**Step 1: Analysis** (`gemini-3-pro-preview`)
+**Step 1: Analysis** (`gemini-3-flash-preview`)
+- Input: Student image + model answer + optional context files
+- Output: JSON with score, feedback, mistakes[], markingInstructions
 - Uses `@google/genai` SDK
-- Input: Student image + model answer/rubric + optional context files (PDF, images, text)
-- Output: JSON with score, feedback, mistakes array, and marking instructions
-- Returns token usage metrics
 
 **Step 2: Image Marking** (`gemini-3-pro-image-preview`)
-- Called via REST API (not SDK) with `responseModalities: ['IMAGE', 'TEXT']`
-- Only called if marking instructions exist from Step 1
-- Input: Original student image (PNG) + marking instructions
+- Input: Original image + marking instructions from Step 1
 - Output: Annotated image with red teacher-style markings
-- Style: Circles, underlines, brackets, margin notes, strikethroughs, scores (natural teacher marking, not robotic ticks)
-
-**API Call Count**: 2 calls per submission (1 analysis + 1 image marking)
+- Uses REST API with `responseModalities: ['IMAGE', 'TEXT']`
+- Runs in background (non-blocking)
 
 ### Key Files
-- `src/lib/supabase.ts` - Client-side Supabase client (anon key)
-- `src/lib/server/supabase.ts` - Server-side admin client (service role key)
-- `src/lib/stores/auth.ts` - Svelte store for auth state with teacher profile
-- `src/lib/types/database.ts` - TypeScript types matching Supabase schema
-- `src/routes/api/mark/+server.ts` - AI marking endpoint (Gemini integration)
-- `supabase/schema.sql` - Database schema with RLS policies
+
+- `src/hooks.server.ts` - Auth validation with `getUser()`, protects `/dashboard` routes
+- `src/routes/+layout.ts` - Creates Supabase client, passes session to pages
+- `src/routes/api/mark/+server.ts` - AI marking endpoint
+- `src/lib/types/database.ts` - TypeScript types (regenerate with MCP tool)
 
 ### Route Structure
-- `/` - Landing page
-- `/login` - Teacher authentication
-- `/dashboard` - Teacher dashboard (sessions overview)
-- `/dashboard/sessions` - List/manage sessions
-- `/dashboard/sessions/new` - Create new session
-- `/dashboard/sessions/[id]` - View session and submissions
-- `/dashboard/analytics` - Analytics view
-- `/join/[code]` - Student submission page
-- `/api/mark` - POST endpoint for AI marking
+
+| Route | Auth | Purpose |
+|-------|------|---------|
+| `/login` | Public | Teacher authentication |
+| `/join/[code]` | Public | Student submission page |
+| `/dashboard/*` | Protected | Teacher dashboard, sessions, analytics |
+| `/api/mark` | Internal | AI marking endpoint |
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and configure:
-- `PUBLIC_SUPABASE_URL` / `PUBLIC_SUPABASE_ANON_KEY` - Supabase project credentials
-- `SUPABASE_SERVICE_ROLE_KEY` - For server-side admin operations
-- `GEMINI_API_KEY` - Google Gemini API key
-- `PUBLIC_APP_URL` - Base URL for the application
+```
+PUBLIC_SUPABASE_URL=...
+PUBLIC_SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...   # Server-side admin operations
+GEMINI_API_KEY=...
+PUBLIC_APP_URL=...              # For QR code generation
+```
 
 ## Database
 
-Schema in `supabase/schema.sql` defines:
-- `teachers` - Linked to Supabase Auth users
-- `questions` - Question bank per teacher
-- `sessions` - Live marking sessions with join codes
-- `submissions` - Student submissions with marking results
+Tables: `teachers`, `questions`, `sessions`, `submissions`
 
-RLS policies enforce teacher data isolation. Students can submit to active sessions without authentication.
+RLS policies enforce:
+- Teachers can only see their own data
+- Students can submit to active sessions without auth
+- Anyone can view questions for active sessions (needed for join page)
+
+## Supabase MCP Integration
+
+Use MCP tools for database operations:
+
+```
+mcp__supabase__execute_sql         # Read queries
+mcp__supabase__apply_migration     # DDL changes (tracked)
+mcp__supabase__generate_typescript_types  # Regenerate types
+mcp__supabase__get_advisors        # Security/performance checks
+```
+
+Always use `apply_migration` for schema changes.

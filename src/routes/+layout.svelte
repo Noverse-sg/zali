@@ -1,24 +1,35 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { auth } from '$lib/stores/auth';
+	import { invalidate } from '$app/navigation';
+	import type { LayoutData } from './$types';
 	import '../app.css';
 
+	export let data: LayoutData;
+
+	// Listen for auth state changes and invalidate data
 	onMount(() => {
-		auth.init();
+		const { supabase } = data;
+
+		const {
+			data: { subscription }
+		} = supabase.auth.onAuthStateChange((event, _session) => {
+			if (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+				// Invalidate all data to refresh with new auth state
+				invalidate('supabase:auth');
+			}
+		});
+
+		return () => {
+			subscription.unsubscribe();
+		};
 	});
 </script>
 
-{#if $auth.loading}
-	<div class="loading-screen">
-		<div class="spinner"></div>
-		<p>Loading...</p>
-	</div>
-{:else}
-	<slot />
-{/if}
+<slot />
 
 <style>
-	.loading-screen {
+	/* Global loading screen styles - kept for components that need it */
+	:global(.loading-screen) {
 		display: flex;
 		flex-direction: column;
 		align-items: center;
@@ -27,7 +38,7 @@
 		gap: 1rem;
 	}
 
-	.spinner {
+	:global(.spinner) {
 		width: 40px;
 		height: 40px;
 		border: 3px solid #e5e7eb;

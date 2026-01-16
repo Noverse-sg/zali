@@ -1,35 +1,50 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
-	import { supabase } from '$lib/supabase';
+	import { invalidateAll } from '$app/navigation';
+	import { PUBLIC_APP_URL } from '$env/static/public';
+	import type { PageData } from './$types';
 	import type { Session, Question, Submission } from '$lib/types/database';
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 	import QRCode from 'qrcode';
-	import { PUBLIC_APP_URL } from '$env/static/public';
+
+	export let data: PageData;
+
+	// Use supabase client from layout (has auth session)
+	$: ({ supabase } = data);
 
 	type SessionWithQuestion = Session & { questions: Question };
 
-	let session: SessionWithQuestion | null = null;
-	let submissions: Submission[] = [];
+	$: session = data.session as SessionWithQuestion;
+	$: submissions = data.submissions as Submission[];
+
 	let qrCodeUrl = '';
-	let loading = true;
-	let loadError = '';
 	let subscription: RealtimeChannel | null = null;
 	let subscriptionStatus: 'connecting' | 'connected' | 'error' = 'connecting';
 	let retryCount = 0;
 	const MAX_RETRIES = 3;
 
-	const sessionId = $page.params.id;
+	let starting = false;
+	let closing = false;
+
 	$: joinUrl = `${PUBLIC_APP_URL}/join/${session?.code}`;
+	$: sessionId = session?.id;
 
 	onMount(async () => {
-		await loadSession();
 		if (session) {
-			await loadSubmissions();
+			// Generate QR code
+			try {
+				qrCodeUrl = await QRCode.toDataURL(joinUrl, {
+					width: 300,
+					margin: 2,
+					color: { dark: '#000000', light: '#ffffff' }
+				});
+			} catch (err) {
+				console.error('Failed to generate QR code:', err);
+			}
+
+			// Set up real-time subscription
 			setupRealtimeSubscription();
 		}
-		loading = false;
 	});
 
 	onDestroy(() => {
@@ -39,59 +54,9 @@
 		}
 	});
 
-	async function loadSession() {
-		try {
-			const { data, error } = await supabase
-				.from('sessions')
-				.select('*, questions(*)')
-				.eq('id', sessionId)
-				.single();
-
-			if (error) {
-				console.error('Failed to load session:', error);
-				loadError = 'Failed to load session. Please try again.';
-				return;
-			}
-
-			session = data as SessionWithQuestion;
-
-			if (session) {
-				try {
-					qrCodeUrl = await QRCode.toDataURL(joinUrl, {
-						width: 300,
-						margin: 2,
-						color: { dark: '#000000', light: '#ffffff' }
-					});
-				} catch (err) {
-					console.error('Failed to generate QR code:', err);
-				}
-			}
-		} catch (err) {
-			console.error('Error loading session:', err);
-			loadError = 'Failed to load session. Please try again.';
-		}
-	}
-
-	async function loadSubmissions() {
-		try {
-			const { data, error } = await supabase
-				.from('submissions')
-				.select('*')
-				.eq('session_id', sessionId)
-				.order('submitted_at', { ascending: false });
-
-			if (error) {
-				console.error('Failed to load submissions:', error);
-				return;
-			}
-
-			submissions = data || [];
-		} catch (err) {
-			console.error('Error loading submissions:', err);
-		}
-	}
-
 	function setupRealtimeSubscription() {
+		if (!sessionId) return;
+
 		if (subscription) {
 			subscription.unsubscribe();
 		}
@@ -126,7 +91,6 @@
 					retryCount = 0;
 				} else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
 					subscriptionStatus = 'error';
-					// Retry with exponential backoff
 					if (retryCount < MAX_RETRIES) {
 						retryCount++;
 						const delay = Math.pow(2, retryCount) * 1000;
@@ -139,6 +103,8 @@
 
 	async function startSession() {
 		if (!session) return;
+		starting = true;
+
 		try {
 			const { error } = await supabase
 				.from('sessions')
@@ -148,17 +114,21 @@
 			if (error) {
 				console.error('Failed to start session:', error);
 				alert('Failed to start session. Please try again.');
-				return;
+			} else {
+				invalidateAll();
 			}
-			await loadSession();
 		} catch (err) {
 			console.error('Error starting session:', err);
 			alert('Failed to start session. Please try again.');
 		}
+
+		starting = false;
 	}
 
 	async function closeSession() {
 		if (!session) return;
+		closing = true;
+
 		try {
 			const { error } = await supabase
 				.from('sessions')
@@ -168,18 +138,19 @@
 			if (error) {
 				console.error('Failed to close session:', error);
 				alert('Failed to close session. Please try again.');
-				return;
+			} else {
+				invalidateAll();
 			}
-			await loadSession();
 		} catch (err) {
 			console.error('Error closing session:', err);
 			alert('Failed to close session. Please try again.');
 		}
+
+		closing = false;
 	}
 
 	function refreshSubmissions() {
-		loadSubmissions();
-		// Also try to reconnect subscription if it failed
+		invalidateAll();
 		if (subscriptionStatus === 'error') {
 			retryCount = 0;
 			setupRealtimeSubscription();
@@ -212,18 +183,7 @@
 </script>
 
 <div class="page">
-	{#if loading}
-		<div class="loading">Loading session...</div>
-	{:else if loadError}
-		<div class="error card">
-			<h3>Error</h3>
-			<p>{loadError}</p>
-			<button class="btn-primary" on:click={() => { loadError = ''; loading = true; loadSession().then(() => { loading = false; }); }}>
-				Try Again
-			</button>
-			<a href="/dashboard/sessions" class="btn-secondary">Back to Sessions</a>
-		</div>
-	{:else if !session}
+	{#if !session}
 		<div class="error card">
 			<h3>Session not found</h3>
 			<a href="/dashboard/sessions" class="btn-primary">Back to Sessions</a>
@@ -238,12 +198,13 @@
 				</div>
 				<div class="session-controls">
 					{#if session.status === 'waiting'}
-						<button class="btn-primary" on:click={startSession}>
-							Start Session
+						<button class="btn-primary" on:click={startSession} disabled={starting}>
+							{starting ? 'Starting...' : 'Start Session'}
 						</button>
-					{:else if session.status === 'active'}
-						<button class="btn-danger" on:click={closeSession}>
-							Close Session
+					{/if}
+					{#if session.status !== 'closed'}
+						<button class="btn-danger" on:click={closeSession} disabled={closing}>
+							{closing ? 'Ending...' : 'End Session'}
 						</button>
 					{/if}
 					<span class="badge {session.status === 'active' ? 'badge-success' : session.status === 'waiting' ? 'badge-warning' : 'badge-error'}">
@@ -398,7 +359,7 @@
 		gap: 0.75rem;
 	}
 
-	.loading, .error {
+	.error {
 		text-align: center;
 		padding: 3rem;
 	}
@@ -592,6 +553,10 @@
 
 		.stats-grid {
 			grid-template-columns: repeat(2, 1fr);
+		}
+
+		.students-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

@@ -1,16 +1,24 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { page } from '$app/stores';
-	import { supabase } from '$lib/supabase';
+	import { createClient } from '@supabase/supabase-js';
+	import { PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY } from '$env/static/public';
+	import type { PageData } from './$types';
 	import type { Session, Question, Submission } from '$lib/types/database';
 	import type { RealtimeChannel } from '@supabase/supabase-js';
 
+	export let data: PageData;
+
 	type SessionWithQuestion = Session & { questions: Question };
 
-	let session: SessionWithQuestion | null = null;
-	let loading = true;
-	let error = '';
+	// Session from server
+	$: session = data.session as SessionWithQuestion | null;
+	$: serverError = data.error as string | null;
+
+	// Create a client-side supabase for storage and realtime (students aren't logged in)
+	const supabase = createClient(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY);
+
 	let step: 'name' | 'capture' | 'submitting' | 'result' = 'name';
+	let clientError = '';
 
 	let studentName = '';
 	let capturedImage: string | null = null;
@@ -32,48 +40,11 @@
 	let currentSubmissionId: string | null = null;
 	let markingStatus = 'Uploading your answer...';
 
-	const code = $page.params.code;
-
-	onMount(async () => {
-		try {
-			const { data, error: fetchError } = await supabase
-				.from('sessions')
-				.select('*, questions(*)')
-				.eq('code', code.toUpperCase())
-				.single();
-
-			if (fetchError) {
-				console.error('Session fetch error:', fetchError);
-				error = 'Session not found. Please check the code.';
-				loading = false;
-				return;
-			}
-
-			if (data) {
-				session = data as SessionWithQuestion;
-				if (session.status === 'closed') {
-					error = 'This session has ended.';
-				} else if (session.status === 'waiting') {
-					error = 'This session has not started yet. Please wait.';
-				}
-			} else {
-				error = 'Session not found. Please check the code.';
-			}
-		} catch (err) {
-			console.error('Failed to load session:', err);
-			error = 'Failed to load session. Please try again.';
-		}
-
-		loading = false;
-	});
-
 	onDestroy(() => {
-		// Clean up timer
 		if (timerInterval) {
 			clearInterval(timerInterval);
 			timerInterval = null;
 		}
-		// Clean up subscription
 		if (submissionSubscription) {
 			submissionSubscription.unsubscribe();
 			submissionSubscription = null;
@@ -97,7 +68,6 @@
 					const updated = payload.new as Submission;
 					console.log('[Subscription] Submission updated:', updated.status);
 
-					// Update the result with new data
 					if (submissionResult) {
 						submissionResult = {
 							...submissionResult,
@@ -109,7 +79,6 @@
 						};
 					}
 
-					// If we got the marked image, we're done
 					if (updated.marked_image_url) {
 						console.log('[Subscription] Marked image received');
 					}
@@ -122,12 +91,19 @@
 
 	function startTimer() {
 		if (!session) return;
+
+		// Clear any existing timer first
+		if (timerInterval) {
+			clearInterval(timerInterval);
+		}
+
 		timeRemaining = session.questions.time_limit_seconds;
 
 		timerInterval = setInterval(() => {
 			timeRemaining--;
 			if (timeRemaining <= 0) {
 				if (timerInterval) clearInterval(timerInterval);
+				timerInterval = null;
 				if (capturedImage) {
 					submitAnswer();
 				}
@@ -151,7 +127,7 @@
 				capturedImage = e.target?.result as string;
 			};
 			reader.onerror = () => {
-				error = 'Failed to read image. Please try again.';
+				clientError = 'Failed to read image. Please try again.';
 			};
 			reader.readAsDataURL(file);
 		}
@@ -168,7 +144,6 @@
 		}
 
 		try {
-			// Upload original image to Supabase storage
 			const imageData = capturedImage.split(',')[1];
 			let imageBlob: Blob;
 
@@ -176,7 +151,7 @@
 				imageBlob = await fetch(capturedImage).then(r => r.blob());
 			} catch (err) {
 				console.error('Failed to convert image:', err);
-				error = 'Failed to process image. Please try again.';
+				clientError = 'Failed to process image. Please try again.';
 				step = 'capture';
 				return;
 			}
@@ -189,7 +164,7 @@
 
 			if (uploadError) {
 				console.error('Upload error:', uploadError);
-				error = 'Failed to upload image. Please try again.';
+				clientError = 'Failed to upload image. Please try again.';
 				step = 'capture';
 				return;
 			}
@@ -200,7 +175,6 @@
 
 			markingStatus = 'Creating submission...';
 
-			// Create submission record
 			const { data: submission, error: submitError } = await supabase
 				.from('submissions')
 				.insert({
@@ -215,17 +189,15 @@
 
 			if (submitError || !submission) {
 				console.error('Submit error:', submitError);
-				error = 'Failed to submit. Please try again.';
+				clientError = 'Failed to submit. Please try again.';
 				step = 'capture';
 				return;
 			}
 
-			// Subscribe to this submission for real-time updates
 			subscribeToSubmission(submission.id);
 
 			markingStatus = 'AI is analyzing your answer...';
 
-			// Call the marking API
 			let response: Response;
 			try {
 				response = await fetch('/api/mark', {
@@ -240,7 +212,7 @@
 				});
 			} catch (err) {
 				console.error('Network error calling mark API:', err);
-				error = 'Network error. Your submission was saved but marking failed.';
+				clientError = 'Network error. Your submission was saved but marking failed.';
 				step = 'result';
 				submissionResult = {
 					score: null,
@@ -255,7 +227,7 @@
 
 			if (!response.ok) {
 				console.error('Mark API error:', response.status);
-				error = 'Marking service error. Your submission was saved.';
+				clientError = 'Marking service error. Your submission was saved.';
 				step = 'result';
 				submissionResult = {
 					score: null,
@@ -275,13 +247,13 @@
 					score: result.score,
 					maxScore: session.questions.max_points,
 					feedback: result.feedback,
-					markedImageUrl: result.markedImageUrl, // Will be null initially, updated via subscription
+					markedImageUrl: result.markedImageUrl,
 					mistakes: result.mistakes || [],
 					status: 'completed'
 				};
 				step = 'result';
 			} else {
-				error = result.error || 'Marking failed. Your submission was saved.';
+				clientError = result.error || 'Marking failed. Your submission was saved.';
 				step = 'result';
 				submissionResult = {
 					score: null,
@@ -294,7 +266,7 @@
 			}
 		} catch (err) {
 			console.error('Submission error:', err);
-			error = 'An unexpected error occurred. Please try again.';
+			clientError = 'An unexpected error occurred. Please try again.';
 			step = 'capture';
 		}
 	}
@@ -307,140 +279,142 @@
 </script>
 
 <div class="container">
-	{#if loading}
-		<div class="loading-screen">
-			<div class="spinner"></div>
-			<p>Loading session...</p>
-		</div>
-	{:else if error && step === 'name'}
+	{#if serverError}
 		<div class="card error-card">
 			<h2>Oops!</h2>
-			<p>{error}</p>
+			<p>{serverError}</p>
 		</div>
-	{:else if session}
-		{#if step === 'name'}
-			<div class="card">
-				<h1>Join Quiz</h1>
-				<p class="question-title">{session.questions.title}</p>
-				{#if session.questions.description}
-					<p class="question-desc">{session.questions.description}</p>
-				{/if}
-				<div class="meta">
-					<span>{session.questions.max_points} points</span>
-					<span>{formatTime(session.questions.time_limit_seconds)} time limit</span>
-				</div>
-
-				<form on:submit|preventDefault={handleNameSubmit}>
-					<div class="field">
-						<label for="name">Your Name</label>
-						<input
-							type="text"
-							id="name"
-							bind:value={studentName}
-							placeholder="Enter your name"
-							required
-						/>
-					</div>
-					<button type="submit" class="btn-primary">Start Quiz</button>
-				</form>
+	{:else if !session}
+		<div class="card error-card">
+			<h2>Session Not Found</h2>
+			<p>Please check the join code and try again.</p>
+		</div>
+	{:else if step === 'name'}
+		<div class="card">
+			<h1>Join Quiz</h1>
+			<p class="question-title">{session.questions.title}</p>
+			{#if session.questions.description}
+				<p class="question-desc">{session.questions.description}</p>
+			{/if}
+			<div class="meta">
+				<span>{session.questions.max_points} points</span>
+				<span>{formatTime(session.questions.time_limit_seconds)} time limit</span>
 			</div>
-		{:else if step === 'capture'}
-			<div class="card capture-card">
-				<div class="timer" class:warning={timeRemaining <= 30}>
-					{formatTime(timeRemaining)}
+
+			<form on:submit|preventDefault={handleNameSubmit}>
+				<div class="field">
+					<label for="name">Your Name</label>
+					<input
+						type="text"
+						id="name"
+						bind:value={studentName}
+						placeholder="Enter your name"
+						required
+					/>
 				</div>
+				<button type="submit" class="btn-primary">Start Quiz</button>
+			</form>
+		</div>
+	{:else if step === 'capture'}
+		<div class="card capture-card">
+			<div class="timer" class:warning={timeRemaining <= 30}>
+				{formatTime(timeRemaining)}
+			</div>
 
-				<h2>Submit Your Answer</h2>
-				<p>Take a photo or upload an image of your written solution.</p>
+			<h2>Submit Your Answer</h2>
+			<p>Take a photo or upload an image of your written solution.</p>
 
-				{#if capturedImage}
-					<div class="preview">
-						<img src={capturedImage} alt="Your answer" />
-						<button class="btn-secondary" on:click={() => { capturedImage = null; }}>
-							Retake
-						</button>
+			{#if capturedImage}
+				<div class="preview">
+					<img src={capturedImage} alt="Your answer" />
+					<button class="btn-secondary" on:click={() => { capturedImage = null; }}>
+						Retake
+					</button>
+				</div>
+			{:else}
+				<div class="capture-options">
+					<button class="btn-primary capture-btn" on:click={() => cameraInput.click()}>
+						Take Photo
+					</button>
+					<button class="btn-secondary capture-btn" on:click={() => fileInput.click()}>
+						Upload from Gallery
+					</button>
+					<input
+						type="file"
+						accept="image/*"
+						capture="environment"
+						bind:this={cameraInput}
+						on:change={handleFileSelect}
+						style="display: none"
+					/>
+					<input
+						type="file"
+						accept="image/*"
+						bind:this={fileInput}
+						on:change={handleFileSelect}
+						style="display: none"
+					/>
+				</div>
+			{/if}
+
+			{#if clientError}
+				<div class="client-error">{clientError}</div>
+			{/if}
+
+			{#if capturedImage}
+				<button class="btn-primary submit-btn" on:click={submitAnswer}>
+					Submit Answer
+				</button>
+			{/if}
+		</div>
+	{:else if step === 'submitting'}
+		<div class="card">
+			<div class="loading-screen">
+				<div class="spinner"></div>
+				<h2>Processing...</h2>
+				<p>{markingStatus}</p>
+			</div>
+		</div>
+	{:else if step === 'result'}
+		<div class="card result-card">
+			<h2>Results</h2>
+
+			{#if submissionResult}
+				{#if submissionResult.score !== null}
+					<div class="score">
+						<span class="score-value">{submissionResult.score}</span>
+						<span class="score-max">/ {submissionResult.maxScore}</span>
 					</div>
 				{:else}
-					<div class="capture-options">
-						<button class="btn-primary capture-btn" on:click={() => cameraInput.click()}>
-							Take Photo
-						</button>
-						<button class="btn-secondary capture-btn" on:click={() => fileInput.click()}>
-							Upload from Gallery
-						</button>
-						<input
-							type="file"
-							accept="image/*"
-							capture="environment"
-							bind:this={cameraInput}
-							on:change={handleFileSelect}
-							style="display: none"
-						/>
-						<input
-							type="file"
-							accept="image/*"
-							bind:this={fileInput}
-							on:change={handleFileSelect}
-							style="display: none"
-						/>
+					<p class="pending-msg">Score pending...</p>
+				{/if}
+
+				<p class="feedback">{submissionResult.feedback}</p>
+
+				{#if submissionResult.markedImageUrl}
+					<div class="marked-image">
+						<h3>Marked Answer</h3>
+						<img src={submissionResult.markedImageUrl} alt="Marked answer" />
+					</div>
+				{:else if submissionResult.status === 'completed'}
+					<div class="marked-image-loading">
+						<div class="spinner-small"></div>
+						<p>Generating marked image...</p>
 					</div>
 				{/if}
 
-				{#if capturedImage}
-					<button class="btn-primary submit-btn" on:click={submitAnswer}>
-						Submit Answer
-					</button>
+				{#if submissionResult.mistakes.length > 0}
+					<div class="mistakes">
+						<h3>Areas for Improvement</h3>
+						<ul>
+							{#each submissionResult.mistakes as mistake}
+								<li>{mistake}</li>
+							{/each}
+						</ul>
+					</div>
 				{/if}
-			</div>
-		{:else if step === 'submitting'}
-			<div class="card">
-				<div class="loading-screen">
-					<div class="spinner"></div>
-					<h2>Processing...</h2>
-					<p>{markingStatus}</p>
-				</div>
-			</div>
-		{:else if step === 'result'}
-			<div class="card result-card">
-				<h2>Results</h2>
-
-				{#if submissionResult}
-					{#if submissionResult.score !== null}
-						<div class="score">
-							<span class="score-value">{submissionResult.score}</span>
-							<span class="score-max">/ {submissionResult.maxScore}</span>
-						</div>
-					{:else}
-						<p class="pending-msg">Score pending...</p>
-					{/if}
-
-					<p class="feedback">{submissionResult.feedback}</p>
-
-					{#if submissionResult.markedImageUrl}
-						<div class="marked-image">
-							<h3>Marked Answer</h3>
-							<img src={submissionResult.markedImageUrl} alt="Marked answer" />
-						</div>
-					{:else if submissionResult.status === 'completed'}
-						<div class="marked-image-loading">
-							<div class="spinner-small"></div>
-							<p>Generating marked image...</p>
-						</div>
-					{/if}
-
-					{#if submissionResult.mistakes.length > 0}
-						<div class="mistakes">
-							<h3>Areas for Improvement</h3>
-							<ul>
-								{#each submissionResult.mistakes as mistake}
-									<li>{mistake}</li>
-								{/each}
-							</ul>
-						</div>
-					{/if}
-				{/if}
-			</div>
-		{/if}
+			{/if}
+		</div>
 	{/if}
 </div>
 
@@ -574,10 +548,25 @@
 		margin-bottom: 0.5rem;
 	}
 
+	.capture-options {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
 	.capture-btn {
 		width: 100%;
 		padding: 1rem;
 		font-size: 1rem;
+	}
+
+	.client-error {
+		color: var(--error);
+		font-size: 0.875rem;
+		padding: 0.5rem;
+		background: #fee2e2;
+		border-radius: 0.375rem;
+		margin-top: 1rem;
 	}
 
 	.submit-btn {
