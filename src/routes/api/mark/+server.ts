@@ -248,7 +248,11 @@ async function markImage(
 		}
 	});
 
-	const markingPrompt = `Add RED teacher marks to this exam paper. ${instructions}. Keep original content, only add red annotations.`;
+	const markingPrompt = `Mark this exam paper as a teacher would. ${instructions}
+
+CRITICAL COLOR REQUIREMENT: Use ONLY RED color (#FF0000) for ALL annotations - ticks, crosses, circles, underlines, scores, comments, checkmarks, corrections. NEVER use green, blue, or any other color. Every single mark must be RED.
+
+Keep original content intact, only add red annotations.`;
 
 	parts.push({ text: markingPrompt });
 
