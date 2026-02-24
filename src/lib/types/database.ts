@@ -15,33 +15,39 @@ export type Database = {
 		Tables: {
 			questions: {
 				Row: {
+					answer_key_type: string | null;
+					answer_key_url: string | null;
 					created_at: string | null;
 					description: string | null;
 					id: string;
 					max_points: number;
-					model_answer: string;
+					model_answer: string | null;
 					teacher_id: string;
 					time_limit_seconds: number;
 					title: string;
 					updated_at: string | null;
 				};
 				Insert: {
+					answer_key_type?: string | null;
+					answer_key_url?: string | null;
 					created_at?: string | null;
 					description?: string | null;
 					id?: string;
 					max_points?: number;
-					model_answer: string;
+					model_answer?: string | null;
 					teacher_id: string;
 					time_limit_seconds?: number;
 					title: string;
 					updated_at?: string | null;
 				};
 				Update: {
+					answer_key_type?: string | null;
+					answer_key_url?: string | null;
 					created_at?: string | null;
 					description?: string | null;
 					id?: string;
 					max_points?: number;
-					model_answer?: string;
+					model_answer?: string | null;
 					teacher_id?: string;
 					time_limit_seconds?: number;
 					title?: string;

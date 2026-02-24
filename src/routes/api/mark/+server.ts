@@ -41,6 +41,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	let modelAnswer: string | undefined;
 	let maxPoints: number | undefined;
 	let contextFiles: ContextFile[] = [];
+	let answerKeyUrl: string | undefined;
+	let answerKeyType: string | undefined;
 
 	try {
 		const body = await request.json();
@@ -49,13 +51,20 @@ export const POST: RequestHandler = async ({ request }) => {
 		modelAnswer = body.modelAnswer;
 		maxPoints = body.maxPoints;
 		contextFiles = body.contextFiles || [];
+		answerKeyUrl = body.answerKeyUrl || undefined;
+		answerKeyType = body.answerKeyType || undefined;
 	} catch (err) {
 		console.error('[Marking] Failed to parse request body:', err);
 		return json({ success: false, error: 'Invalid request body' }, { status: 400 });
 	}
 
-	if (!submissionId || !imageBase64 || !modelAnswer) {
+	if (!submissionId || !imageBase64) {
 		return json({ success: false, error: 'Missing required fields' }, { status: 400 });
+	}
+
+	// Must have either a model answer text or an answer key file
+	if (!modelAnswer && !answerKeyUrl) {
+		return json({ success: false, error: 'Missing model answer or answer key' }, { status: 400 });
 	}
 
 	try {
@@ -69,10 +78,31 @@ export const POST: RequestHandler = async ({ request }) => {
 			console.error('[Marking] Failed to update status to marking:', updateError);
 		}
 
+		// If we have an answer key file URL, fetch it and add as context
+		if (answerKeyUrl && answerKeyType) {
+			try {
+				console.log(`[Marking] Fetching answer key file: ${answerKeyUrl}`);
+				const fileResponse = await fetch(answerKeyUrl);
+				if (fileResponse.ok) {
+					const arrayBuffer = await fileResponse.arrayBuffer();
+					const base64Data = Buffer.from(arrayBuffer).toString('base64');
+					contextFiles.push({
+						name: 'answer_key',
+						mimeType: answerKeyType,
+						data: base64Data
+					});
+				} else {
+					console.warn('[Marking] Failed to fetch answer key file:', fileResponse.status);
+				}
+			} catch (err) {
+				console.warn('[Marking] Error fetching answer key file:', err);
+			}
+		}
+
 		// Step 1: Analyze the student's answer and generate marking instructions
 		// Timeout after 60 seconds
 		const analysisResult = await withTimeout(
-			analyzeStudentAnswer(imageBase64, modelAnswer, maxPoints ?? 10, contextFiles),
+			analyzeStudentAnswer(imageBase64, modelAnswer || '', maxPoints ?? 10, contextFiles),
 			60000,
 			'Analysis'
 		);
@@ -146,13 +176,24 @@ async function analyzeStudentAnswer(
 	const contents: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
 
 	// Build concise prompt
-	let promptText = `You are marking a student's handwritten exam answer (image attached).
+	let promptText: string;
+	if (modelAnswer) {
+		promptText = `You are marking a student's handwritten exam answer (image attached).
 
 MODEL ANSWER: ${modelAnswer}
 MAX POINTS: ${maxPoints}
 
 Analyze the student's answer in the image and return ONLY this JSON:
 {"score": <number 0-${maxPoints}>, "feedback": "<1-2 sentences>", "mistakes": ["<mistake1>", "<mistake2>"], "markingInstructions": "<brief instructions for red annotations on the image>"}`;
+	} else {
+		promptText = `You are marking a student's handwritten exam answer (image attached).
+
+The answer key / model answer is provided as an attached file (image or PDF). Compare the student's handwritten answer against the answer key.
+MAX POINTS: ${maxPoints}
+
+Analyze the student's answer in the image and return ONLY this JSON:
+{"score": <number 0-${maxPoints}>, "feedback": "<1-2 sentences>", "mistakes": ["<mistake1>", "<mistake2>"], "markingInstructions": "<brief instructions for red annotations on the image>"}`;
+	}
 
 	contents.push({ text: promptText });
 

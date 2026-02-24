@@ -206,8 +206,10 @@
 					body: JSON.stringify({
 						submissionId: submission.id,
 						imageBase64: imageData,
-						modelAnswer: session.questions.model_answer,
-						maxPoints: session.questions.max_points
+						modelAnswer: session.questions.model_answer || '',
+						maxPoints: session.questions.max_points,
+						answerKeyUrl: session.questions.answer_key_url || null,
+						answerKeyType: session.questions.answer_key_type || null
 					})
 				});
 			} catch (err) {
