@@ -101,10 +101,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 
 		// Step 1: Analyze the student's answer using Qwen 3.5 Plus via DashScope
-		// Timeout after 180 seconds (multimodal image analysis can be slow)
+		// Timeout after 90 seconds
 		const analysisResult = await withTimeout(
 			analyzeStudentAnswer(imageBase64, modelAnswer || '', maxPoints ?? 10, contextFiles),
-			180000,
+			90000,
 			'Analysis'
 		);
 
@@ -230,7 +230,8 @@ Analyze the student's answer in the image and return ONLY this JSON:
 			body: JSON.stringify({
 				model: 'qwen3.5-plus',
 				messages: [{ role: 'user', content }],
-				stream: false
+				stream: false,
+				enable_thinking: false
 			})
 		});
 	} catch (apiError) {
