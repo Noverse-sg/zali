@@ -7,7 +7,7 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
 // Kie.ai API endpoints
-const KIE_CHAT_URL = 'https://api.kie.ai/gemini-2.5-flash/v1/chat/completions';
+const KIE_CHAT_URL = 'https://api.kie.ai/gemini-2.5-pro/v1/chat/completions';
 const KIE_TASK_URL = 'https://api.kie.ai/api/v1/jobs/createTask';
 const KIE_RESULT_URL = 'https://api.kie.ai/api/v1/jobs/recordInfo';
 
@@ -215,7 +215,7 @@ Analyze the student's answer in the image and return ONLY this JSON:
 		image_url: { url: `data:image/png;base64,${imageBase64}` }
 	});
 
-	console.log('[Marking] Calling Kie.ai Gemini 2.5 Flash for analysis...');
+	console.log('[Marking] Calling Kie.ai Gemini 2.5 Pro for analysis...');
 
 	let response;
 	try {
