@@ -1,16 +1,15 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { GEMINI_API_KEY, SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
+import { SUPABASE_SERVICE_ROLE_KEY, KIE_API_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { createClient } from '@supabase/supabase-js';
-import { GoogleGenAI } from '@google/genai';
 
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
-// Use Gemini 3 models for analysis and image marking
-const ANALYSIS_MODEL = 'gemini-3-flash-preview';
-const IMAGE_EDIT_MODEL = 'gemini-3-pro-image-preview';
+// Kie.ai API endpoints
+const KIE_CHAT_URL = 'https://api.kie.ai/gemini-2.5-flash/v1/chat/completions';
+const KIE_TASK_URL = 'https://api.kie.ai/api/v1/jobs/createTask';
+const KIE_RESULT_URL = 'https://api.kie.ai/api/v1/jobs/recordInfo';
 
 interface ContextFile {
 	name: string;
@@ -99,7 +98,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 		}
 
-		// Step 1: Analyze the student's answer and generate marking instructions
+		// Step 1: Analyze the student's answer using Kie.ai Gemini 2.5 Flash
 		// Timeout after 60 seconds
 		const analysisResult = await withTimeout(
 			analyzeStudentAnswer(imageBase64, modelAnswer || '', maxPoints ?? 10, contextFiles),
@@ -125,9 +124,9 @@ export const POST: RequestHandler = async ({ request }) => {
 			console.error('[Marking] Failed to update submission with results:', resultError);
 		}
 
-		// Step 2: Generate marked image in background (don't block response)
+		// Step 2: Generate marked image in background using Nano Banana Edit
 		if (analysisResult.instructions) {
-			markImageInBackground(submissionId, imageBase64, analysisResult.instructions);
+			markImageInBackground(submissionId, analysisResult.instructions);
 		}
 
 		return json({
@@ -164,8 +163,7 @@ export const POST: RequestHandler = async ({ request }) => {
 };
 
 /**
- * STEP 1: Analyze student answer and generate marking instructions
- * Sends student image + context files to Gemini for analysis
+ * STEP 1: Analyze student answer using Kie.ai Gemini 2.5 Flash (OpenAI-compatible chat API)
  */
 async function analyzeStudentAnswer(
 	imageBase64: string,
@@ -173,9 +171,10 @@ async function analyzeStudentAnswer(
 	maxPoints: number,
 	contextFiles: ContextFile[]
 ): Promise<{ score: number; feedback: string; mistakes: string[]; instructions: string | null; usage: TokenUsage }> {
-	const contents: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
+	// Build message content array (OpenAI-compatible multimodal format)
+	const content: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
 
-	// Build concise prompt
+	// Build prompt
 	let promptText: string;
 	if (modelAnswer) {
 		promptText = `You are marking a student's handwritten exam answer (image attached).
@@ -195,65 +194,67 @@ Analyze the student's answer in the image and return ONLY this JSON:
 {"score": <number 0-${maxPoints}>, "feedback": "<1-2 sentences>", "mistakes": ["<mistake1>", "<mistake2>"], "markingInstructions": "<brief instructions for red annotations on the image>"}`;
 	}
 
-	contents.push({ text: promptText });
+	content.push({ type: 'text', text: promptText });
 
-	// Add context files
+	// Add context files (answer key images/PDFs/text)
 	for (const ctx of contextFiles) {
-		if (ctx.mimeType === 'application/pdf') {
-			contents.push({
-				inlineData: {
-					mimeType: 'application/pdf',
-					data: ctx.data
-				}
-			});
-		} else if (ctx.mimeType.startsWith('image/')) {
-			contents.push({
-				inlineData: {
-					mimeType: ctx.mimeType,
-					data: ctx.data
-				}
+		if (ctx.mimeType.startsWith('image/') || ctx.mimeType === 'application/pdf') {
+			content.push({
+				type: 'image_url',
+				image_url: { url: `data:${ctx.mimeType};base64,${ctx.data}` }
 			});
 		} else if (ctx.mimeType.startsWith('text/') || ctx.mimeType === 'application/json') {
 			const text = Buffer.from(ctx.data, 'base64').toString('utf-8');
-			contents.push({ text: `\n=== ${ctx.name} ===\n${text}` });
+			content.push({ type: 'text', text: `\n=== ${ctx.name} ===\n${text}` });
 		}
 	}
 
 	// Add student image
-	contents.push({
-		inlineData: {
-			mimeType: 'image/png',
-			data: imageBase64
-		}
+	content.push({
+		type: 'image_url',
+		image_url: { url: `data:image/png;base64,${imageBase64}` }
 	});
 
-	console.log(`[Marking] Calling ${ANALYSIS_MODEL} for analysis...`);
+	console.log('[Marking] Calling Kie.ai Gemini 2.5 Flash for analysis...');
 
 	let response;
 	try {
-		response = await genAI.models.generateContent({
-			model: ANALYSIS_MODEL,
-			contents: contents
+		response = await fetch(KIE_CHAT_URL, {
+			method: 'POST',
+			headers: {
+				'Authorization': `Bearer ${KIE_API_KEY}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				messages: [{ role: 'user', content }],
+				stream: false
+			})
 		});
 	} catch (apiError) {
-		console.error('[Marking] Gemini API error:', apiError);
-		throw new Error(`Gemini API call failed: ${apiError instanceof Error ? apiError.message : 'Unknown error'}`);
+		console.error('[Marking] Kie.ai API error:', apiError);
+		throw new Error(`Kie.ai API call failed: ${apiError instanceof Error ? apiError.message : 'Unknown error'}`);
 	}
 
-	console.log('[Marking] Response received:', JSON.stringify(response).slice(0, 500));
+	if (!response.ok) {
+		const errBody = await response.text();
+		console.error('[Marking] Kie.ai API error response:', errBody);
+		throw new Error(`Kie.ai API returned ${response.status}: ${errBody}`);
+	}
 
-	const text = response.text || '';
+	const data = await response.json();
+	console.log('[Marking] Response received:', JSON.stringify(data).slice(0, 500));
+
+	const text = data.choices?.[0]?.message?.content || '';
 	if (!text) {
-		console.error('[Marking] Empty response from model. Full response:', JSON.stringify(response));
+		console.error('[Marking] Empty response from model. Full response:', JSON.stringify(data));
 		throw new Error('No response from analysis model');
 	}
 
-	// Extract token usage from response
-	const usageMetadata = response.usageMetadata;
+	// Extract token usage
 	const usage: TokenUsage = {
-		promptTokens: usageMetadata?.promptTokenCount ?? 0,
-		candidatesTokens: usageMetadata?.candidatesTokenCount ?? 0,
-		totalTokens: usageMetadata?.totalTokenCount ?? 0
+		promptTokens: data.usage?.prompt_tokens ?? 0,
+		candidatesTokens: data.usage?.completion_tokens ?? 0,
+		totalTokens: data.usage?.total_tokens ?? 0
 	};
 
 	// Extract JSON from response
@@ -274,108 +275,134 @@ Analyze the student's answer in the image and return ONLY this JSON:
 }
 
 /**
- * STEP 2: Mark the image using Gemini image edit
+ * STEP 2: Mark the image using Kie.ai Nano Banana Edit (async task API)
+ * Creates a task and polls for the result.
  */
 async function markImage(
-	imageBase64: string,
+	imageUrl: string,
 	instructions: string
-): Promise<{ markedImageBase64: string | null; usage: TokenUsage }> {
-	const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
-
-	parts.push({
-		inlineData: {
-			mimeType: 'image/png',
-			data: imageBase64
-		}
-	});
-
+): Promise<string | null> {
 	const markingPrompt = `Mark this exam paper as a teacher would. ${instructions}
 
 CRITICAL COLOR REQUIREMENT: Use ONLY RED color (#FF0000) for ALL annotations - ticks, crosses, circles, underlines, scores, comments, checkmarks, corrections. NEVER use green, blue, or any other color. Every single mark must be RED.
 
 Keep original content intact, only add red annotations.`;
 
-	parts.push({ text: markingPrompt });
+	console.log('[Marking] Creating Nano Banana Edit task...');
 
-	console.log(`[Marking] Calling ${IMAGE_EDIT_MODEL} for image marking...`);
-	const response = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_EDIT_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-		{
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				contents: [{ parts }],
-				generationConfig: {
-					temperature: 0.1,
-					responseModalities: ['IMAGE', 'TEXT']
-				}
-			})
+	// Create the marking task
+	const createResponse = await fetch(KIE_TASK_URL, {
+		method: 'POST',
+		headers: {
+			'Authorization': `Bearer ${KIE_API_KEY}`,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			model: 'google/nano-banana-edit',
+			input: {
+				prompt: markingPrompt,
+				image_urls: [imageUrl],
+				output_format: 'png'
+			}
+		})
+	});
+
+	if (!createResponse.ok) {
+		const errBody = await createResponse.text();
+		console.error('[Marking] Nano Banana task creation failed:', errBody);
+		throw new Error(`Failed to create marking task: ${errBody}`);
+	}
+
+	const createData = await createResponse.json();
+	if (createData.code !== 200 || !createData.data?.taskId) {
+		throw new Error(`Task creation failed: ${createData.msg || 'Unknown error'}`);
+	}
+
+	const taskId = createData.data.taskId;
+	console.log(`[Marking] Task created: ${taskId}`);
+
+	// Poll for result (max 120 seconds, check every 3 seconds)
+	const maxAttempts = 40;
+	const pollInterval = 3000;
+
+	for (let i = 0; i < maxAttempts; i++) {
+		await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+		const statusResponse = await fetch(`${KIE_RESULT_URL}?taskId=${taskId}`, {
+			headers: { 'Authorization': `Bearer ${KIE_API_KEY}` }
+		});
+
+		if (!statusResponse.ok) continue;
+
+		const statusData = await statusResponse.json();
+		const state = statusData.data?.state;
+
+		if (state === 'success') {
+			// Parse resultJson to get image URLs
+			const resultJson = JSON.parse(statusData.data.resultJson || '{}');
+			const resultUrls = resultJson.resultUrls || [];
+
+			if (resultUrls.length > 0) {
+				console.log(`[Marking] Nano Banana task complete, image URL received`);
+				return resultUrls[0];
+			}
+			console.warn('[Marking] Task succeeded but no image URL in result');
+			return null;
 		}
-	);
 
-	if (!response.ok) {
-		const err = await response.json();
-		console.error('[Marking] Gemini marking error:', err);
-		throw new Error(err.error?.message || 'Failed to mark image');
-	}
-
-	const data = await response.json();
-	const candidate = data.candidates?.[0];
-
-	if (!candidate?.content?.parts) {
-		throw new Error('No response from Gemini for marking');
-	}
-
-	// Extract token usage from response
-	const usageMetadata = data.usageMetadata;
-	const usage: TokenUsage = {
-		promptTokens: usageMetadata?.promptTokenCount ?? 0,
-		candidatesTokens: usageMetadata?.candidatesTokenCount ?? 0,
-		totalTokens: usageMetadata?.totalTokenCount ?? 0
-	};
-
-	for (const part of candidate.content.parts) {
-		if (part.inlineData?.mimeType?.startsWith('image/')) {
-			return {
-				markedImageBase64: part.inlineData.data,
-				usage
-			};
+		if (state === 'failed' || state === 'error') {
+			const failMsg = statusData.data?.failMsg || 'Unknown error';
+			throw new Error(`Marking task failed: ${failMsg}`);
 		}
+
+		// Still processing, continue polling
 	}
 
-	console.warn('[Marking] No marked image returned');
-	return {
-		markedImageBase64: null,
-		usage
-	};
+	throw new Error('Marking task timed out after 120 seconds');
 }
 
 /**
  * Background image marking - runs async without blocking response
- * Includes retry logic for transient failures
+ * Uses Nano Banana Edit via Kie.ai
  */
-function markImageInBackground(submissionId: string, imageBase64: string, instructions: string) {
+function markImageInBackground(submissionId: string, instructions: string) {
 	const MAX_RETRIES = 2;
-	const RETRY_DELAY = 3000; // 3 seconds
+	const RETRY_DELAY = 3000;
 
-	// Run without awaiting - fire and forget
 	(async () => {
 		let lastError: Error | null = null;
+
+		// Get the original image URL from the submission
+		const { data: submission } = await supabaseAdmin
+			.from('submissions')
+			.select('original_image_url')
+			.eq('id', submissionId)
+			.single();
+
+		if (!submission?.original_image_url) {
+			console.error(`[Marking] No original_image_url found for submission ${submissionId}`);
+			return;
+		}
 
 		for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
 			try {
 				console.log(`[Marking] Starting background image marking for ${submissionId} (attempt ${attempt}/${MAX_RETRIES})`);
 
-				// Add timeout for the marking operation (90 seconds)
-				const markResult = await withTimeout(
-					markImage(imageBase64, instructions),
-					90000,
+				const markedImageUrl = await withTimeout(
+					markImage(submission.original_image_url, instructions),
+					150000, // 150 seconds (task creation + polling)
 					'Image marking'
 				);
 
-				if (markResult.markedImageBase64) {
+				if (markedImageUrl) {
+					// Download the marked image from Kie.ai (URLs expire in 24h)
+					const imageResponse = await fetch(markedImageUrl);
+					if (!imageResponse.ok) {
+						throw new Error(`Failed to download marked image: ${imageResponse.status}`);
+					}
+
+					const imageBuffer = Buffer.from(await imageResponse.arrayBuffer());
 					const markedFileName = `marked/${submissionId}_marked.png`;
-					const imageBuffer = Buffer.from(markResult.markedImageBase64, 'base64');
 
 					const { error: uploadError } = await supabaseAdmin.storage
 						.from('submissions')
@@ -402,11 +429,10 @@ function markImageInBackground(submissionId: string, imageBase64: string, instru
 					}
 
 					console.log(`[Marking] Background marking complete for ${submissionId}`);
-					console.log(`[Marking] Image marking tokens - prompt: ${markResult.usage.promptTokens}, output: ${markResult.usage.candidatesTokens}`);
-					return; // Success - exit the retry loop
+					return;
 				} else {
 					console.warn(`[Marking] No marked image returned for ${submissionId}`);
-					return; // No image but no error - don't retry
+					return;
 				}
 			} catch (err) {
 				lastError = err instanceof Error ? err : new Error(String(err));
@@ -419,7 +445,6 @@ function markImageInBackground(submissionId: string, imageBase64: string, instru
 			}
 		}
 
-		// All retries exhausted
 		console.error(`[Marking] Background marking failed after ${MAX_RETRIES} attempts for ${submissionId}:`, lastError?.message);
 	})();
 }
