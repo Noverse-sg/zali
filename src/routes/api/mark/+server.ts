@@ -101,10 +101,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 
 		// Step 1: Analyze the student's answer using Qwen 3.5 Plus via DashScope
-		// Timeout after 60 seconds
+		// Timeout after 180 seconds (multimodal image analysis can be slow)
 		const analysisResult = await withTimeout(
 			analyzeStudentAnswer(imageBase64, modelAnswer || '', maxPoints ?? 10, contextFiles),
-			60000,
+			180000,
 			'Analysis'
 		);
 
