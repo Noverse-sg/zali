@@ -1,13 +1,15 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { SUPABASE_SERVICE_ROLE_KEY, KIE_API_KEY } from '$env/static/private';
+import { SUPABASE_SERVICE_ROLE_KEY, KIE_API_KEY, DASHSCOPE_API_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Kie.ai API endpoints
-const KIE_CHAT_URL = 'https://api.kie.ai/gemini-2.5-pro/v1/chat/completions';
+// DashScope (Qwen) API endpoint for analysis
+const DASHSCOPE_CHAT_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions';
+
+// Kie.ai API endpoints for image marking (Nano Banana Edit)
 const KIE_TASK_URL = 'https://api.kie.ai/api/v1/jobs/createTask';
 const KIE_RESULT_URL = 'https://api.kie.ai/api/v1/jobs/recordInfo';
 
@@ -98,7 +100,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 		}
 
-		// Step 1: Analyze the student's answer using Kie.ai Gemini 2.5 Flash
+		// Step 1: Analyze the student's answer using Qwen 3.5 Plus via DashScope
 		// Timeout after 60 seconds
 		const analysisResult = await withTimeout(
 			analyzeStudentAnswer(imageBase64, modelAnswer || '', maxPoints ?? 10, contextFiles),
@@ -163,7 +165,7 @@ export const POST: RequestHandler = async ({ request }) => {
 };
 
 /**
- * STEP 1: Analyze student answer using Kie.ai Gemini 2.5 Flash (OpenAI-compatible chat API)
+ * STEP 1: Analyze student answer using Qwen 3.5 Plus via DashScope (OpenAI-compatible chat API)
  */
 async function analyzeStudentAnswer(
 	imageBase64: string,
@@ -215,30 +217,31 @@ Analyze the student's answer in the image and return ONLY this JSON:
 		image_url: { url: `data:image/png;base64,${imageBase64}` }
 	});
 
-	console.log('[Marking] Calling Kie.ai Gemini 2.5 Pro for analysis...');
+	console.log('[Marking] Calling Qwen 3.5 Plus via DashScope for analysis...');
 
 	let response;
 	try {
-		response = await fetch(KIE_CHAT_URL, {
+		response = await fetch(DASHSCOPE_CHAT_URL, {
 			method: 'POST',
 			headers: {
-				'Authorization': `Bearer ${KIE_API_KEY}`,
+				'Authorization': `Bearer ${DASHSCOPE_API_KEY}`,
 				'Content-Type': 'application/json'
 			},
 			body: JSON.stringify({
+				model: 'qwen3.5-plus',
 				messages: [{ role: 'user', content }],
 				stream: false
 			})
 		});
 	} catch (apiError) {
-		console.error('[Marking] Kie.ai API error:', apiError);
-		throw new Error(`Kie.ai API call failed: ${apiError instanceof Error ? apiError.message : 'Unknown error'}`);
+		console.error('[Marking] DashScope API error:', apiError);
+		throw new Error(`DashScope API call failed: ${apiError instanceof Error ? apiError.message : 'Unknown error'}`);
 	}
 
 	if (!response.ok) {
 		const errBody = await response.text();
-		console.error('[Marking] Kie.ai API error response:', errBody);
-		throw new Error(`Kie.ai API returned ${response.status}: ${errBody}`);
+		console.error('[Marking] DashScope API error response:', errBody);
+		throw new Error(`DashScope API returned ${response.status}: ${errBody}`);
 	}
 
 	const data = await response.json();
