@@ -86,10 +86,25 @@
 						{/if}
 						<p><strong>Points:</strong> {selectedQuestion.max_points}</p>
 						<p><strong>Time Limit:</strong> {Math.floor(selectedQuestion.time_limit_seconds / 60)}m {selectedQuestion.time_limit_seconds % 60}s</p>
-						<div class="model-answer">
-							<strong>Model Answer:</strong>
-							<pre>{selectedQuestion.model_answer}</pre>
-						</div>
+						{#if selectedQuestion.answer_key_url}
+							<div class="model-answer">
+								<strong>Answer Key:</strong>
+								{#if selectedQuestion.answer_key_type?.startsWith('image/')}
+									<img src={selectedQuestion.answer_key_url} alt="Answer key" class="answer-key-preview" />
+								{:else if selectedQuestion.answer_key_type === 'application/pdf'}
+									<p class="file-label">PDF file uploaded</p>
+								{:else if selectedQuestion.model_answer}
+									<pre>{selectedQuestion.model_answer}</pre>
+								{:else}
+									<p class="file-label">Text file uploaded</p>
+								{/if}
+							</div>
+						{:else if selectedQuestion.model_answer}
+							<div class="model-answer">
+								<strong>Model Answer:</strong>
+								<pre>{selectedQuestion.model_answer}</pre>
+							</div>
+						{/if}
 					</div>
 				</div>
 			{/if}
@@ -215,6 +230,20 @@
 		overflow-x: auto;
 		white-space: pre-wrap;
 		color: var(--gray-600);
+	}
+
+	.answer-key-preview {
+		max-width: 100%;
+		max-height: 200px;
+		border-radius: 0.375rem;
+		object-fit: contain;
+		margin-top: 0.25rem;
+	}
+
+	.file-label {
+		color: var(--gray-500);
+		font-size: 0.875rem;
+		font-style: italic;
 	}
 
 	.create-error {
