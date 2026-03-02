@@ -37,7 +37,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: strin
 /**
  * Poll Noverse API for job completion
  */
-async function pollJobResult(jobId: string, maxWaitMs = 120000): Promise<Record<string, unknown>> {
+async function pollJobResult(jobId: string, maxWaitMs = 300000): Promise<Record<string, unknown>> {
 	const pollInterval = 3000;
 	const maxAttempts = Math.ceil(maxWaitMs / pollInterval);
 
@@ -162,10 +162,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		const { job_id } = await submitRes.json();
 		console.log(`[Marking] Job submitted: ${job_id}, polling for result...`);
 
-		// Poll for result
+		// Poll for result (up to 5 minutes — image annotation can take 2-3 min)
 		const result = await withTimeout(
 			pollJobResult(job_id),
-			120000,
+			300000,
 			'Job polling'
 		);
 
