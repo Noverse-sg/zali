@@ -1,8 +1,15 @@
 import { json } from '@sveltejs/kit';
-import type { RequestHandler } from './$types';
+import type { RequestHandler, RequestEvent } from './$types';
 import { NOVERSE_API_KEY, NOVERSE_API_URL, SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { createClient } from '@supabase/supabase-js';
+
+// Allow up to 10MB request bodies (student images can be large)
+export const config = {
+	body: {
+		maxSize: '10mb'
+	}
+};
 
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 

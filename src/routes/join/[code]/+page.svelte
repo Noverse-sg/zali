@@ -118,13 +118,50 @@
 		}
 	}
 
+	/**
+	 * Compress an image to fit within maxWidth/maxHeight and target ~500KB
+	 */
+	function compressImage(dataUrl: string, maxWidth = 1600, maxHeight = 1600): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const img = new Image();
+			img.onload = () => {
+				let { width, height } = img;
+
+				// Scale down if larger than max dimensions
+				if (width > maxWidth || height > maxHeight) {
+					const ratio = Math.min(maxWidth / width, maxHeight / height);
+					width = Math.round(width * ratio);
+					height = Math.round(height * ratio);
+				}
+
+				const canvas = document.createElement('canvas');
+				canvas.width = width;
+				canvas.height = height;
+				const ctx = canvas.getContext('2d');
+				if (!ctx) { reject(new Error('Canvas not supported')); return; }
+
+				ctx.drawImage(img, 0, 0, width, height);
+
+				// Use JPEG at 0.7 quality for smaller file size
+				resolve(canvas.toDataURL('image/jpeg', 0.7));
+			};
+			img.onerror = () => reject(new Error('Failed to load image'));
+			img.src = dataUrl;
+		});
+	}
+
 	function handleFileSelect(event: Event) {
 		const target = event.target as HTMLInputElement;
 		const file = target.files?.[0];
 		if (file) {
 			const reader = new FileReader();
-			reader.onload = (e) => {
-				capturedImage = e.target?.result as string;
+			reader.onload = async (e) => {
+				try {
+					const raw = e.target?.result as string;
+					capturedImage = await compressImage(raw);
+				} catch {
+					capturedImage = e.target?.result as string;
+				}
 			};
 			reader.onerror = () => {
 				clientError = 'Failed to read image. Please try again.';
