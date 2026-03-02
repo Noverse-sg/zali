@@ -13,6 +13,7 @@ CREATE TABLE questions (
     title TEXT NOT NULL,
     description TEXT,
     model_answer TEXT,
+    question_image_url TEXT,      -- URL to uploaded question image (optional)
     answer_key_url TEXT,          -- URL to uploaded answer key file (image, PDF, text)
     answer_key_type TEXT,         -- MIME type of answer key file
     max_points INTEGER NOT NULL DEFAULT 10,

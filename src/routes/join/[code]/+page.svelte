@@ -335,6 +335,9 @@
 			{#if session.questions.description}
 				<p class="question-desc">{session.questions.description}</p>
 			{/if}
+			{#if session.questions.question_image_url}
+				<img src={session.questions.question_image_url} alt="Question" class="question-image" />
+			{/if}
 			<div class="meta">
 				<span>{session.questions.max_points} points</span>
 				<span>{formatTime(session.questions.time_limit_seconds)} time limit</span>
@@ -517,6 +520,15 @@
 		font-size: 0.875rem;
 		color: var(--gray-600);
 		margin-bottom: 0.5rem;
+	}
+
+	.question-image {
+		max-width: 100%;
+		max-height: 300px;
+		border-radius: 0.5rem;
+		object-fit: contain;
+		margin-bottom: 0.75rem;
+		border: 1px solid var(--gray-200);
 	}
 
 	.meta {

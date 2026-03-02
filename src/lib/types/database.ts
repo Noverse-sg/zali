@@ -22,6 +22,7 @@ export type Database = {
 					id: string;
 					max_points: number;
 					model_answer: string | null;
+					question_image_url: string | null;
 					teacher_id: string;
 					time_limit_seconds: number;
 					title: string;
@@ -35,6 +36,7 @@ export type Database = {
 					id?: string;
 					max_points?: number;
 					model_answer?: string | null;
+					question_image_url?: string | null;
 					teacher_id: string;
 					time_limit_seconds?: number;
 					title: string;
@@ -48,6 +50,7 @@ export type Database = {
 					id?: string;
 					max_points?: number;
 					model_answer?: string | null;
+					question_image_url?: string | null;
 					teacher_id?: string;
 					time_limit_seconds?: number;
 					title?: string;

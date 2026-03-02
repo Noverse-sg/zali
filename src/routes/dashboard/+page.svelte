@@ -22,6 +22,12 @@
 	let saving = false;
 	let saveError = '';
 
+	// Question image state
+	let questionImageFile: File | null = null;
+	let questionImagePreview: string | null = null;
+	let existingQuestionImageUrl: string | null = null;
+	let questionImageInputEl: HTMLInputElement;
+
 	// Answer key file state
 	let answerKeyFile: File | null = null;
 	let answerKeyPreview: string | null = null;
@@ -36,6 +42,7 @@
 			description = question.description || '';
 			maxPoints = question.max_points;
 			timeLimit = question.time_limit_seconds;
+			existingQuestionImageUrl = question.question_image_url || null;
 			existingAnswerKeyUrl = question.answer_key_url || null;
 			existingAnswerKeyType = question.answer_key_type || null;
 		} else {
@@ -44,9 +51,12 @@
 			description = '';
 			maxPoints = 10;
 			timeLimit = 300;
+			existingQuestionImageUrl = null;
 			existingAnswerKeyUrl = null;
 			existingAnswerKeyType = null;
 		}
+		questionImageFile = null;
+		questionImagePreview = null;
 		answerKeyFile = null;
 		answerKeyPreview = null;
 		showModal = true;
@@ -79,6 +89,28 @@
 		}
 	}
 
+	function handleQuestionImageSelect(event: Event) {
+		const target = event.target as HTMLInputElement;
+		const file = target.files?.[0];
+		if (!file) return;
+
+		questionImageFile = file;
+		existingQuestionImageUrl = null;
+
+		const reader = new FileReader();
+		reader.onload = (e) => {
+			questionImagePreview = e.target?.result as string;
+		};
+		reader.readAsDataURL(file);
+	}
+
+	function removeQuestionImage() {
+		questionImageFile = null;
+		questionImagePreview = null;
+		existingQuestionImageUrl = null;
+		if (questionImageInputEl) questionImageInputEl.value = '';
+	}
+
 	function removeAnswerKey() {
 		answerKeyFile = null;
 		answerKeyPreview = null;
@@ -109,9 +141,36 @@
 		saveError = '';
 
 		try {
+			let questionImageUrl = existingQuestionImageUrl;
 			let answerKeyUrl = existingAnswerKeyUrl;
 			let answerKeyType = existingAnswerKeyType;
 			let modelAnswer: string | null = null;
+
+			// Upload question image if selected
+			if (questionImageFile) {
+				const fileExt = questionImageFile.name.split('.').pop() || 'png';
+				const fileName = `${data.user.id}/question_${Date.now()}.${fileExt}`;
+
+				const { error: uploadError } = await supabase.storage
+					.from('answer-keys')
+					.upload(fileName, questionImageFile, {
+						contentType: questionImageFile.type,
+						upsert: true
+					});
+
+				if (uploadError) {
+					console.error('Failed to upload question image:', uploadError);
+					saveError = 'Failed to upload question image. Please try again.';
+					saving = false;
+					return;
+				}
+
+				const { data: urlData } = supabase.storage
+					.from('answer-keys')
+					.getPublicUrl(fileName);
+
+				questionImageUrl = urlData.publicUrl;
+			}
 
 			// Upload new file if selected
 			if (answerKeyFile) {
@@ -149,6 +208,7 @@
 				teacher_id: data.user.id,
 				title,
 				description: description || null,
+				question_image_url: questionImageUrl,
 				model_answer: modelAnswer,
 				answer_key_url: answerKeyUrl,
 				answer_key_type: answerKeyType,
@@ -249,6 +309,9 @@
 					{#if question.description}
 						<p class="question-desc">{question.description}</p>
 					{/if}
+					{#if question.question_image_url}
+						<img src={question.question_image_url} alt="Question" class="question-image-thumb" />
+					{/if}
 					{#if question.answer_key_url}
 						<div class="question-answer">
 							<strong>Answer Key:</strong>
@@ -311,6 +374,43 @@
 						placeholder="Additional context or instructions..."
 						rows="2"
 					></textarea>
+				</div>
+
+				<div class="field">
+					<label for="questionImage">Question Image (optional)</label>
+
+					{#if questionImageFile && questionImagePreview}
+						<div class="file-preview">
+							<img src={questionImagePreview} alt="Question image preview" class="answer-key-img" />
+							<button type="button" class="btn-remove" on:click={removeQuestionImage}>Remove</button>
+						</div>
+					{:else if existingQuestionImageUrl}
+						<div class="file-preview">
+							<img src={existingQuestionImageUrl} alt="Question image" class="answer-key-img" />
+							<button type="button" class="btn-remove" on:click={removeQuestionImage}>Remove</button>
+						</div>
+					{:else}
+						<div
+							class="upload-area"
+							on:click={() => questionImageInputEl.click()}
+							on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') questionImageInputEl.click(); }}
+							role="button"
+							tabindex="0"
+						>
+							<span class="upload-icon">+</span>
+							<span>Click to upload question image</span>
+							<span class="upload-hint">Upload an image of the question paper</span>
+						</div>
+					{/if}
+
+					<input
+						type="file"
+						id="questionImage"
+						accept="image/*"
+						bind:this={questionImageInputEl}
+						on:change={handleQuestionImageSelect}
+						style="display: none"
+					/>
 				</div>
 
 				<div class="field">
@@ -659,6 +759,14 @@
 
 	.btn-remove:hover {
 		background: #fee2e2;
+	}
+
+	.question-image-thumb {
+		max-width: 100%;
+		max-height: 120px;
+		border-radius: 0.375rem;
+		object-fit: contain;
+		border: 1px solid var(--gray-200);
 	}
 
 	.answer-key-thumb {
