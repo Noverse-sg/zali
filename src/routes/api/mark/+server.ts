@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import type { RequestHandler, RequestEvent } from './$types';
+import type { RequestHandler } from './$types';
 import { NOVERSE_API_KEY, NOVERSE_API_URL, SUPABASE_SERVICE_ROLE_KEY } from '$env/static/private';
 import { PUBLIC_SUPABASE_URL } from '$env/static/public';
 import { createClient } from '@supabase/supabase-js';
@@ -12,6 +12,11 @@ export const config = {
 };
 
 const supabaseAdmin = createClient(PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+const NOVERSE_HEADERS = {
+	'Content-Type': 'application/json',
+	'Authorization': `Bearer ${NOVERSE_API_KEY}`
+};
 
 interface ContextFile {
 	name: string;
@@ -29,8 +34,42 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: strin
 	]);
 }
 
+/**
+ * Poll Noverse API for job completion
+ */
+async function pollJobResult(jobId: string, maxWaitMs = 120000): Promise<Record<string, unknown>> {
+	const pollInterval = 3000;
+	const maxAttempts = Math.ceil(maxWaitMs / pollInterval);
+
+	for (let i = 0; i < maxAttempts; i++) {
+		await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+		const res = await fetch(`${NOVERSE_API_URL}/jobs/${jobId}`, {
+			headers: NOVERSE_HEADERS
+		});
+
+		if (!res.ok) {
+			console.error(`[Marking] Poll error: ${res.status}`);
+			continue;
+		}
+
+		const job = await res.json();
+
+		if (job.status === 'completed') {
+			return job;
+		}
+
+		if (job.status === 'failed') {
+			throw new Error(job.error || 'Marking job failed');
+		}
+
+		// Still pending/processing, keep polling
+	}
+
+	throw new Error('Marking job timed out');
+}
+
 export const POST: RequestHandler = async ({ request }) => {
-	// Parse request body once at the start
 	let submissionId: string | undefined;
 	let imageBase64: string | undefined;
 	let modelAnswer: string | undefined;
@@ -57,7 +96,6 @@ export const POST: RequestHandler = async ({ request }) => {
 		return json({ success: false, error: 'Missing required fields' }, { status: 400 });
 	}
 
-	// Must have either a model answer text or an answer key file
 	if (!modelAnswer && !answerKeyUrl) {
 		return json({ success: false, error: 'Missing model answer or answer key' }, { status: 400 });
 	}
@@ -73,68 +111,90 @@ export const POST: RequestHandler = async ({ request }) => {
 			console.error('[Marking] Failed to update status to marking:', updateError);
 		}
 
-		// If we have an answer key file URL, fetch it and add as context
-		if (answerKeyUrl && answerKeyType) {
-			try {
-				console.log(`[Marking] Fetching answer key file: ${answerKeyUrl}`);
-				const fileResponse = await fetch(answerKeyUrl);
-				if (fileResponse.ok) {
-					const arrayBuffer = await fileResponse.arrayBuffer();
-					const base64Data = Buffer.from(arrayBuffer).toString('base64');
-					contextFiles.push({
-						name: 'answer_key',
-						mimeType: answerKeyType,
-						data: base64Data
-					});
-				} else {
-					console.warn('[Marking] Failed to fetch answer key file:', fileResponse.status);
-				}
-			} catch (err) {
-				console.warn('[Marking] Error fetching answer key file:', err);
-			}
+		// Get the original image URL from the submission (Noverse API needs a URL, not base64)
+		const { data: submission } = await supabaseAdmin
+			.from('submissions')
+			.select('original_image_url')
+			.eq('id', submissionId)
+			.single();
+
+		if (!submission?.original_image_url) {
+			throw new Error('No original_image_url found for submission');
 		}
 
-		// Call Noverse API for marking (timeout after 120 seconds)
-		const noverseResponse = await withTimeout(
-			fetch(`${NOVERSE_API_URL}/api/mark-image`, {
+		// Build Noverse job request
+		const jobBody: Record<string, unknown> = {
+			mode: 'advanced',
+			pdf_url: submission.original_image_url,
+		};
+
+		// Add context (model answer as instructions, answer key as URL)
+		const context: Record<string, string> = {};
+		if (modelAnswer) {
+			context.instructions = `MODEL ANSWER / RUBRIC:\n${modelAnswer}\n\nMAXIMUM POINTS: ${maxPoints ?? 10}\n\nMark this student's answer against the model answer above.`;
+		}
+		if (answerKeyUrl) {
+			context.answer_key_url = answerKeyUrl;
+		}
+		if (Object.keys(context).length > 0) {
+			jobBody.context = context;
+		}
+
+		console.log('[Marking] Submitting job to Noverse API...');
+
+		// Submit job to Noverse API
+		const submitRes = await withTimeout(
+			fetch(`${NOVERSE_API_URL}/jobs`, {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					'Authorization': `Bearer ${NOVERSE_API_KEY}`
-				},
-				body: JSON.stringify({
-					imageBase64,
-					modelAnswer: modelAnswer || '',
-					maxPoints: maxPoints ?? 10,
-					contextFiles
-				})
+				headers: NOVERSE_HEADERS,
+				body: JSON.stringify(jobBody)
 			}),
-			120000,
-			'Noverse API'
+			15000,
+			'Job submission'
 		);
 
-		if (!noverseResponse.ok) {
-			const err = await noverseResponse.json().catch(() => ({}));
-			console.error('[Marking] Noverse API error:', err);
-			throw new Error(err.error || 'Noverse API request failed');
+		if (!submitRes.ok) {
+			const err = await submitRes.json().catch(() => ({}));
+			console.error('[Marking] Noverse job submission error:', err);
+			throw new Error(err.error || `Noverse API returned ${submitRes.status}`);
 		}
 
-		const result = await noverseResponse.json();
+		const { job_id } = await submitRes.json();
+		console.log(`[Marking] Job submitted: ${job_id}, polling for result...`);
 
-		console.log(`[Marking] Analysis tokens - prompt: ${result.usage?.analysis?.promptTokens ?? 0}, output: ${result.usage?.analysis?.candidatesTokens ?? 0}`);
-		console.log(`[Marking] Image marking tokens - prompt: ${result.usage?.imageMarking?.promptTokens ?? 0}, output: ${result.usage?.imageMarking?.candidatesTokens ?? 0}`);
+		// Poll for result
+		const result = await withTimeout(
+			pollJobResult(job_id),
+			120000,
+			'Job polling'
+		);
 
-		// Upload marked image to Supabase storage if returned
+		console.log(`[Marking] Job completed: ${job_id}`);
+
+		// Extract results from Noverse response
+		const results = result.results as Record<string, unknown> | undefined;
+		const analysis = results?.analysis as Record<string, unknown> | undefined;
+		const pages = (results?.pages || []) as Array<{ page: number; imageBase64?: string; mimeType?: string }>;
+
+		const score = (analysis?.total_score as number) ?? 0;
+		const maxScore = (analysis?.max_score as number) ?? maxPoints ?? 10;
+		const feedback = (analysis?.summary as string) ?? 'No feedback available.';
+		const pageResults = (analysis?.pages || []) as Array<{ feedback?: string }>;
+		const mistakes = pageResults
+			.filter((p) => p.feedback)
+			.map((p) => p.feedback as string);
+
+		// Upload marked images to Supabase storage
 		let markedImageUrl: string | null = null;
-		if (result.markedImageBase64) {
+		if (pages.length > 0 && pages[0].imageBase64) {
 			try {
 				const markedFileName = `marked/${submissionId}_marked.png`;
-				const imageBuffer = Buffer.from(result.markedImageBase64, 'base64');
+				const imageBuffer = Buffer.from(pages[0].imageBase64, 'base64');
 
 				await supabaseAdmin.storage
 					.from('submissions')
 					.upload(markedFileName, imageBuffer, {
-						contentType: 'image/png',
+						contentType: pages[0].mimeType || 'image/png',
 						upsert: true
 					});
 
@@ -149,12 +209,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 
 		// Update submission with results
+		const normalizedScore = maxScore > 0 ? Math.round((score / maxScore) * (maxPoints ?? 10)) : score;
+
 		const { error: resultError } = await supabaseAdmin
 			.from('submissions')
 			.update({
-				score: result.score,
-				feedback: result.feedback,
-				mistakes: result.mistakes,
+				score: normalizedScore,
+				feedback,
+				mistakes,
 				marked_image_url: markedImageUrl,
 				status: 'completed',
 				marked_at: new Date().toISOString()
@@ -167,16 +229,15 @@ export const POST: RequestHandler = async ({ request }) => {
 
 		return json({
 			success: true,
-			score: result.score,
-			feedback: result.feedback,
-			mistakes: result.mistakes,
+			score: normalizedScore,
+			feedback,
+			mistakes,
 			markedImageUrl
 		});
 	} catch (error) {
 		const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 		console.error('[Marking] Error:', errorMessage);
 
-		// Update submission status to error
 		if (submissionId) {
 			const { error: statusError } = await supabaseAdmin
 				.from('submissions')
