@@ -1,90 +1,212 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/stores/auth';
+	import { invalidateAll } from '$app/navigation';
+	import type { PageData } from './$types';
 	import type { Question } from '$lib/types/database';
 
-	let questions = $state<Question[]>([]);
-	let loading = $state(true);
-	let showModal = $state(false);
-	let editingQuestion = $state<Question | null>(null);
+	export let data: PageData;
+
+	// Use supabase client from layout (has auth session)
+	$: ({ supabase } = data);
+
+	// Reactive questions from server data
+	$: questions = data.questions as Question[];
+
+	let showModal = false;
+	let editingQuestion: Question | null = null;
 
 	// Form state
-	let title = $state('');
-	let description = $state('');
-	let modelAnswer = $state('');
-	let maxPoints = $state(10);
-	let timeLimit = $state(300);
-	let saving = $state(false);
+	let title = '';
+	let description = '';
+	let maxPoints = 10;
+	let timeLimit = 300;
+	let saving = false;
+	let saveError = '';
 
-	onMount(loadQuestions);
-
-	async function loadQuestions() {
-		loading = true;
-		const { data } = await supabase
-			.from('questions')
-			.select('*')
-			.order('created_at', { ascending: false });
-
-		questions = data || [];
-		loading = false;
-	}
+	// Answer key file state
+	let answerKeyFile: File | null = null;
+	let answerKeyPreview: string | null = null;
+	let existingAnswerKeyUrl: string | null = null;
+	let existingAnswerKeyType: string | null = null;
+	let fileInputEl: HTMLInputElement;
 
 	function openModal(question?: Question) {
 		if (question) {
 			editingQuestion = question;
 			title = question.title;
 			description = question.description || '';
-			modelAnswer = question.model_answer;
 			maxPoints = question.max_points;
 			timeLimit = question.time_limit_seconds;
+			existingAnswerKeyUrl = question.answer_key_url || null;
+			existingAnswerKeyType = question.answer_key_type || null;
 		} else {
 			editingQuestion = null;
 			title = '';
 			description = '';
-			modelAnswer = '';
 			maxPoints = 10;
 			timeLimit = 300;
+			existingAnswerKeyUrl = null;
+			existingAnswerKeyType = null;
 		}
+		answerKeyFile = null;
+		answerKeyPreview = null;
 		showModal = true;
 	}
 
 	function closeModal() {
 		showModal = false;
 		editingQuestion = null;
+		saveError = '';
+	}
+
+	function handleAnswerKeySelect(event: Event) {
+		const target = event.target as HTMLInputElement;
+		const file = target.files?.[0];
+		if (!file) return;
+
+		answerKeyFile = file;
+		existingAnswerKeyUrl = null;
+		existingAnswerKeyType = null;
+
+		// Generate preview for images
+		if (file.type.startsWith('image/')) {
+			const reader = new FileReader();
+			reader.onload = (e) => {
+				answerKeyPreview = e.target?.result as string;
+			};
+			reader.readAsDataURL(file);
+		} else {
+			answerKeyPreview = null;
+		}
+	}
+
+	function removeAnswerKey() {
+		answerKeyFile = null;
+		answerKeyPreview = null;
+		existingAnswerKeyUrl = null;
+		existingAnswerKeyType = null;
+		if (fileInputEl) fileInputEl.value = '';
+	}
+
+	function getFileDisplayName(url: string, mimeType: string | null): string {
+		if (mimeType?.startsWith('image/')) return 'Image file';
+		if (mimeType === 'application/pdf') return 'PDF file';
+		if (mimeType?.startsWith('text/')) return 'Text file';
+		// Extract filename from URL
+		const parts = url.split('/');
+		return parts[parts.length - 1] || 'Uploaded file';
 	}
 
 	async function saveQuestion() {
-		if (!$auth.user) return;
-		saving = true;
+		if (!data.user) return;
 
-		const questionData = {
-			teacher_id: $auth.user.id,
-			title,
-			description: description || null,
-			model_answer: modelAnswer,
-			max_points: maxPoints,
-			time_limit_seconds: timeLimit
-		};
-
-		if (editingQuestion) {
-			await supabase
-				.from('questions')
-				.update({ ...questionData, updated_at: new Date().toISOString() })
-				.eq('id', editingQuestion.id);
-		} else {
-			await supabase.from('questions').insert(questionData);
+		// Validate: must have a file (new or existing)
+		if (!answerKeyFile && !existingAnswerKeyUrl) {
+			saveError = 'Please upload an answer key file.';
+			return;
 		}
 
-		saving = false;
-		closeModal();
-		loadQuestions();
+		saving = true;
+		saveError = '';
+
+		try {
+			let answerKeyUrl = existingAnswerKeyUrl;
+			let answerKeyType = existingAnswerKeyType;
+			let modelAnswer: string | null = null;
+
+			// Upload new file if selected
+			if (answerKeyFile) {
+				answerKeyType = answerKeyFile.type;
+				const fileExt = answerKeyFile.name.split('.').pop() || 'bin';
+				const fileName = `${data.user.id}/${Date.now()}.${fileExt}`;
+
+				const { error: uploadError } = await supabase.storage
+					.from('answer-keys')
+					.upload(fileName, answerKeyFile, {
+						contentType: answerKeyFile.type,
+						upsert: true
+					});
+
+				if (uploadError) {
+					console.error('Failed to upload answer key:', uploadError);
+					saveError = 'Failed to upload file. Please try again.';
+					saving = false;
+					return;
+				}
+
+				const { data: urlData } = supabase.storage
+					.from('answer-keys')
+					.getPublicUrl(fileName);
+
+				answerKeyUrl = urlData.publicUrl;
+
+				// For text files, also extract content into model_answer for backward compat
+				if (answerKeyFile.type.startsWith('text/')) {
+					modelAnswer = await answerKeyFile.text();
+				}
+			}
+
+			const questionData = {
+				teacher_id: data.user.id,
+				title,
+				description: description || null,
+				model_answer: modelAnswer,
+				answer_key_url: answerKeyUrl,
+				answer_key_type: answerKeyType,
+				max_points: maxPoints,
+				time_limit_seconds: timeLimit
+			};
+
+			if (editingQuestion) {
+				const { error } = await supabase
+					.from('questions')
+					.update({ ...questionData, updated_at: new Date().toISOString() })
+					.eq('id', editingQuestion.id);
+
+				if (error) {
+					console.error('Failed to update question:', error);
+					saveError = 'Failed to save question. Please try again.';
+					saving = false;
+					return;
+				}
+			} else {
+				const { error } = await supabase.from('questions').insert(questionData);
+
+				if (error) {
+					console.error('Failed to create question:', error);
+					saveError = 'Failed to create question. Please try again.';
+					saving = false;
+					return;
+				}
+			}
+
+			saving = false;
+			closeModal();
+			invalidateAll();
+		} catch (err) {
+			console.error('Error saving question:', err);
+			saveError = 'An unexpected error occurred. Please try again.';
+			saving = false;
+		}
 	}
 
 	async function deleteQuestion(id: string) {
 		if (!confirm('Delete this question?')) return;
-		await supabase.from('questions').delete().eq('id', id);
-		loadQuestions();
+
+		try {
+			const { error } = await supabase.from('questions').delete().eq('id', id);
+
+			if (error) {
+				console.error('Failed to delete question:', error);
+				alert('Failed to delete question. Please try again.');
+				return;
+			}
+
+			// Refresh data from server
+			invalidateAll();
+		} catch (err) {
+			console.error('Error deleting question:', err);
+			alert('An unexpected error occurred. Please try again.');
+		}
 	}
 
 	function formatTime(seconds: number): string {
@@ -100,18 +222,16 @@
 			<h1>Questions</h1>
 			<p>Create and manage your question bank</p>
 		</div>
-		<button class="btn-primary" onclick={() => openModal()}>
+		<button class="btn-primary" on:click={() => openModal()}>
 			+ New Question
 		</button>
 	</header>
 
-	{#if loading}
-		<div class="loading">Loading questions...</div>
-	{:else if questions.length === 0}
+	{#if questions.length === 0}
 		<div class="empty-state card">
 			<h3>No questions yet</h3>
 			<p>Create your first question to get started</p>
-			<button class="btn-primary" onclick={() => openModal()}>
+			<button class="btn-primary" on:click={() => openModal()}>
 				Create Question
 			</button>
 		</div>
@@ -129,20 +249,33 @@
 					{#if question.description}
 						<p class="question-desc">{question.description}</p>
 					{/if}
-					{#if question.model_answer}
-					<div class="question-answer">
-						<strong>Model Answer:</strong>
-						<p>{question.model_answer.slice(0, 150)}{question.model_answer.length > 150 ? '...' : ''}</p>
-					</div>
-				{/if}
+					{#if question.answer_key_url}
+						<div class="question-answer">
+							<strong>Answer Key:</strong>
+							{#if question.answer_key_type?.startsWith('image/')}
+								<img src={question.answer_key_url} alt="Answer key" class="answer-key-thumb" />
+							{:else if question.answer_key_type === 'application/pdf'}
+								<p>PDF file uploaded</p>
+							{:else if question.model_answer}
+								<p>{question.model_answer.slice(0, 150)}{question.model_answer.length > 150 ? '...' : ''}</p>
+							{:else}
+								<p>Text file uploaded</p>
+							{/if}
+						</div>
+					{:else if question.model_answer}
+						<div class="question-answer">
+							<strong>Model Answer:</strong>
+							<p>{question.model_answer.slice(0, 150)}{question.model_answer.length > 150 ? '...' : ''}</p>
+						</div>
+					{/if}
 					<div class="question-actions">
-						<button class="btn-secondary" onclick={() => openModal(question)}>
+						<button class="btn-secondary" on:click={() => openModal(question)}>
 							Edit
 						</button>
 						<a href="/dashboard/sessions/new?question={question.id}" class="btn-primary">
 							Start Session
 						</a>
-						<button class="btn-danger" onclick={() => deleteQuestion(question.id)}>
+						<button class="btn-danger" on:click={() => deleteQuestion(question.id)}>
 							Delete
 						</button>
 					</div>
@@ -154,11 +287,11 @@
 
 {#if showModal}
 	<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-	<div class="modal-overlay" onclick={closeModal}>
-		<div class="modal card" onclick={(e) => e.stopPropagation()}>
+	<div class="modal-overlay" on:click={closeModal}>
+		<div class="modal card" on:click={(e) => e.stopPropagation()}>
 			<h2>{editingQuestion ? 'Edit Question' : 'New Question'}</h2>
 
-			<form onsubmit={(e) => { e.preventDefault(); saveQuestion(); }}>
+			<form on:submit|preventDefault={saveQuestion}>
 				<div class="field">
 					<label for="title">Title</label>
 					<input
@@ -181,14 +314,66 @@
 				</div>
 
 				<div class="field">
-					<label for="modelAnswer">Model Answer / Rubric</label>
-					<textarea
-						id="modelAnswer"
-						bind:value={modelAnswer}
-						placeholder="The correct answer or marking criteria..."
-						rows="5"
-						required
-					></textarea>
+					<label for="answerKey">Answer Key (Image, PDF, or Text file)</label>
+
+					{#if answerKeyFile}
+						<div class="file-preview">
+							{#if answerKeyPreview}
+								<img src={answerKeyPreview} alt="Answer key preview" class="answer-key-img" />
+							{:else}
+								<div class="file-info">
+									<span class="file-icon">
+										{#if answerKeyFile.type === 'application/pdf'}
+											PDF
+										{:else}
+											TXT
+										{/if}
+									</span>
+									<span class="file-name">{answerKeyFile.name}</span>
+								</div>
+							{/if}
+							<button type="button" class="btn-remove" on:click={removeAnswerKey}>Remove</button>
+						</div>
+					{:else if existingAnswerKeyUrl}
+						<div class="file-preview">
+							{#if existingAnswerKeyType?.startsWith('image/')}
+								<img src={existingAnswerKeyUrl} alt="Answer key" class="answer-key-img" />
+							{:else}
+								<div class="file-info">
+									<span class="file-icon">
+										{#if existingAnswerKeyType === 'application/pdf'}
+											PDF
+										{:else}
+											TXT
+										{/if}
+									</span>
+									<span class="file-name">{getFileDisplayName(existingAnswerKeyUrl, existingAnswerKeyType)}</span>
+								</div>
+							{/if}
+							<button type="button" class="btn-remove" on:click={removeAnswerKey}>Remove</button>
+						</div>
+					{:else}
+						<div
+							class="upload-area"
+							on:click={() => fileInputEl.click()}
+							on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputEl.click(); }}
+							role="button"
+							tabindex="0"
+						>
+							<span class="upload-icon">+</span>
+							<span>Click to upload answer key</span>
+							<span class="upload-hint">Supports images, PDF, and text files</span>
+						</div>
+					{/if}
+
+					<input
+						type="file"
+						id="answerKey"
+						accept="image/*,.pdf,.txt,text/plain,application/pdf"
+						bind:this={fileInputEl}
+						on:change={handleAnswerKeySelect}
+						style="display: none"
+					/>
 				</div>
 
 				<div class="field-row">
@@ -216,8 +401,12 @@
 					</div>
 				</div>
 
+				{#if saveError}
+					<div class="save-error">{saveError}</div>
+				{/if}
+
 				<div class="modal-actions">
-					<button type="button" class="btn-secondary" onclick={closeModal}>
+					<button type="button" class="btn-secondary" on:click={closeModal}>
 						Cancel
 					</button>
 					<button type="submit" class="btn-primary" disabled={saving}>
@@ -247,7 +436,7 @@
 		font-size: 0.875rem;
 	}
 
-	.loading, .empty-state {
+	.empty-state {
 		text-align: center;
 		padding: 3rem;
 	}
@@ -258,6 +447,15 @@
 
 	.empty-state p {
 		color: var(--gray-500);
+		margin-bottom: 1rem;
+	}
+
+	.save-error {
+		color: var(--error);
+		font-size: 0.875rem;
+		padding: 0.5rem;
+		background: #fee2e2;
+		border-radius: 0.375rem;
 		margin-bottom: 1rem;
 	}
 
@@ -374,5 +572,100 @@
 		justify-content: flex-end;
 		gap: 0.5rem;
 		margin-top: 1.5rem;
+	}
+
+	/* File upload styles */
+	.upload-area {
+		border: 2px dashed var(--gray-300);
+		border-radius: 0.5rem;
+		padding: 1.5rem;
+		text-align: center;
+		cursor: pointer;
+		transition: border-color 0.2s, background 0.2s;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.25rem;
+	}
+
+	.upload-area:hover {
+		border-color: var(--primary);
+		background: var(--gray-50);
+	}
+
+	.upload-icon {
+		font-size: 1.5rem;
+		color: var(--gray-400);
+		font-weight: 300;
+	}
+
+	.upload-area span {
+		font-size: 0.875rem;
+		color: var(--gray-600);
+	}
+
+	.upload-hint {
+		font-size: 0.75rem !important;
+		color: var(--gray-400) !important;
+	}
+
+	.file-preview {
+		border: 1px solid var(--gray-200);
+		border-radius: 0.5rem;
+		padding: 0.75rem;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.answer-key-img {
+		max-width: 100%;
+		max-height: 200px;
+		border-radius: 0.375rem;
+		object-fit: contain;
+	}
+
+	.file-info {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem;
+	}
+
+	.file-icon {
+		background: var(--gray-100);
+		color: var(--gray-600);
+		padding: 0.25rem 0.5rem;
+		border-radius: 0.25rem;
+		font-size: 0.75rem;
+		font-weight: 600;
+	}
+
+	.file-name {
+		font-size: 0.875rem;
+		color: var(--gray-700);
+	}
+
+	.btn-remove {
+		background: none;
+		border: 1px solid var(--error);
+		color: var(--error);
+		padding: 0.25rem 0.75rem;
+		border-radius: 0.375rem;
+		font-size: 0.75rem;
+		cursor: pointer;
+	}
+
+	.btn-remove:hover {
+		background: #fee2e2;
+	}
+
+	.answer-key-thumb {
+		max-width: 100%;
+		max-height: 100px;
+		border-radius: 0.375rem;
+		object-fit: contain;
+		margin-top: 0.25rem;
 	}
 </style>

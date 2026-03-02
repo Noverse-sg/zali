@@ -1,65 +1,70 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
-	import { supabase } from '$lib/supabase';
-	import type { Session, Question, Submission } from '$lib/types/database';
-	import QRCode from 'qrcode';
+	import { invalidateAll } from '$app/navigation';
 	import { PUBLIC_APP_URL } from '$env/static/public';
+	import type { PageData } from './$types';
+	import type { Session, Question, Submission } from '$lib/types/database';
+	import type { RealtimeChannel } from '@supabase/supabase-js';
+	import QRCode from 'qrcode';
+
+	export let data: PageData;
+
+	// Use supabase client from layout (has auth session)
+	$: ({ supabase } = data);
 
 	type SessionWithQuestion = Session & { questions: Question };
 
-	let session = $state<SessionWithQuestion | null>(null);
-	let submissions = $state<Submission[]>([]);
-	let qrCodeUrl = $state('');
-	let loading = $state(true);
-	let subscription: ReturnType<typeof supabase.channel> | null = null;
+	$: session = data.session as SessionWithQuestion;
+	$: submissions = data.submissions as Submission[];
 
-	const sessionId = $page.params.id;
-	const joinUrl = $derived(`${PUBLIC_APP_URL}/join/${session?.code}`);
+	let qrCodeUrl = '';
+	let subscription: RealtimeChannel | null = null;
+	let subscriptionStatus: 'connecting' | 'connected' | 'error' = 'connecting';
+	let retryCount = 0;
+	const MAX_RETRIES = 3;
+
+	let starting = false;
+	let closing = false;
+
+	$: joinUrl = `${PUBLIC_APP_URL}/join/${session?.code}`;
+	$: sessionId = session?.id;
 
 	onMount(async () => {
-		await loadSession();
-		await loadSubmissions();
-		setupRealtimeSubscription();
-		loading = false;
+		if (session) {
+			// Generate QR code
+			try {
+				qrCodeUrl = await QRCode.toDataURL(joinUrl, {
+					width: 300,
+					margin: 2,
+					color: { dark: '#000000', light: '#ffffff' }
+				});
+			} catch (err) {
+				console.error('Failed to generate QR code:', err);
+			}
+
+			// Set up real-time subscription
+			setupRealtimeSubscription();
+		}
 	});
 
 	onDestroy(() => {
-		subscription?.unsubscribe();
+		if (subscription) {
+			subscription.unsubscribe();
+			subscription = null;
+		}
 	});
 
-	async function loadSession() {
-		const { data } = await supabase
-			.from('sessions')
-			.select('*, questions(*)')
-			.eq('id', sessionId)
-			.single();
-
-		session = data as SessionWithQuestion;
-
-		if (session) {
-			qrCodeUrl = await QRCode.toDataURL(joinUrl, {
-				width: 300,
-				margin: 2,
-				color: { dark: '#000000', light: '#ffffff' }
-			});
-		}
-	}
-
-	async function loadSubmissions() {
-		const { data } = await supabase
-			.from('submissions')
-			.select('*')
-			.eq('session_id', sessionId)
-			.order('submitted_at', { ascending: false });
-
-		submissions = data || [];
-	}
-
 	function setupRealtimeSubscription() {
+		if (!sessionId) return;
+
+		if (subscription) {
+			subscription.unsubscribe();
+		}
+
+		subscriptionStatus = 'connecting';
+
 		subscription = supabase
-			.channel(`session-${sessionId}`)
+			.channel(`session-${sessionId}-${Date.now()}`)
 			.on(
 				'postgres_changes',
 				{
@@ -69,6 +74,7 @@
 					filter: `session_id=eq.${sessionId}`
 				},
 				(payload) => {
+					console.log('[Realtime] Received update:', payload.eventType);
 					if (payload.eventType === 'INSERT') {
 						submissions = [payload.new as Submission, ...submissions];
 					} else if (payload.eventType === 'UPDATE') {
@@ -78,25 +84,77 @@
 					}
 				}
 			)
-			.subscribe();
+			.subscribe((status) => {
+				console.log('[Realtime] Subscription status:', status);
+				if (status === 'SUBSCRIBED') {
+					subscriptionStatus = 'connected';
+					retryCount = 0;
+				} else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+					subscriptionStatus = 'error';
+					if (retryCount < MAX_RETRIES) {
+						retryCount++;
+						const delay = Math.pow(2, retryCount) * 1000;
+						console.log(`[Realtime] Retrying in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})`);
+						setTimeout(() => setupRealtimeSubscription(), delay);
+					}
+				}
+			});
 	}
 
 	async function startSession() {
 		if (!session) return;
-		await supabase
-			.from('sessions')
-			.update({ status: 'active', started_at: new Date().toISOString() })
-			.eq('id', sessionId);
-		await loadSession();
+		starting = true;
+
+		try {
+			const { error } = await supabase
+				.from('sessions')
+				.update({ status: 'active', started_at: new Date().toISOString() })
+				.eq('id', sessionId);
+
+			if (error) {
+				console.error('Failed to start session:', error);
+				alert('Failed to start session. Please try again.');
+			} else {
+				invalidateAll();
+			}
+		} catch (err) {
+			console.error('Error starting session:', err);
+			alert('Failed to start session. Please try again.');
+		}
+
+		starting = false;
 	}
 
 	async function closeSession() {
 		if (!session) return;
-		await supabase
-			.from('sessions')
-			.update({ status: 'closed', closed_at: new Date().toISOString() })
-			.eq('id', sessionId);
-		await loadSession();
+		closing = true;
+
+		try {
+			const { error } = await supabase
+				.from('sessions')
+				.update({ status: 'closed', closed_at: new Date().toISOString() })
+				.eq('id', sessionId);
+
+			if (error) {
+				console.error('Failed to close session:', error);
+				alert('Failed to close session. Please try again.');
+			} else {
+				invalidateAll();
+			}
+		} catch (err) {
+			console.error('Error closing session:', err);
+			alert('Failed to close session. Please try again.');
+		}
+
+		closing = false;
+	}
+
+	function refreshSubmissions() {
+		invalidateAll();
+		if (subscriptionStatus === 'error') {
+			retryCount = 0;
+			setupRealtimeSubscription();
+		}
 	}
 
 	function getStatusColor(status: string) {
@@ -109,7 +167,7 @@
 		}
 	}
 
-	const stats = $derived({
+	$: stats = {
 		total: submissions.length,
 		pending: submissions.filter(s => s.status === 'pending').length,
 		marking: submissions.filter(s => s.status === 'marking').length,
@@ -121,13 +179,11 @@
 				submissions.filter(s => s.score !== null).length
 			)
 			: null
-	});
+	};
 </script>
 
 <div class="page">
-	{#if loading}
-		<div class="loading">Loading session...</div>
-	{:else if !session}
+	{#if !session}
 		<div class="error card">
 			<h3>Session not found</h3>
 			<a href="/dashboard/sessions" class="btn-primary">Back to Sessions</a>
@@ -142,12 +198,13 @@
 				</div>
 				<div class="session-controls">
 					{#if session.status === 'waiting'}
-						<button class="btn-primary" onclick={startSession}>
-							Start Session
+						<button class="btn-primary" on:click={startSession} disabled={starting}>
+							{starting ? 'Starting...' : 'Start Session'}
 						</button>
-					{:else if session.status === 'active'}
-						<button class="btn-danger" onclick={closeSession}>
-							Close Session
+					{/if}
+					{#if session.status !== 'closed'}
+						<button class="btn-danger" on:click={closeSession} disabled={closing}>
+							{closing ? 'Ending...' : 'End Session'}
 						</button>
 					{/if}
 					<span class="badge {session.status === 'active' ? 'badge-success' : session.status === 'waiting' ? 'badge-warning' : 'badge-error'}">
@@ -196,7 +253,21 @@
 		</div>
 
 		<div class="card submissions-section">
-			<h2>Submissions ({submissions.length})</h2>
+			<div class="submissions-header">
+				<h2>Submissions ({submissions.length})</h2>
+				<div class="submissions-controls">
+					{#if subscriptionStatus === 'error'}
+						<span class="connection-status error">Live updates disconnected</span>
+					{:else if subscriptionStatus === 'connecting'}
+						<span class="connection-status connecting">Connecting...</span>
+					{:else}
+						<span class="connection-status connected">Live</span>
+					{/if}
+					<button class="btn-secondary btn-small" on:click={refreshSubmissions}>
+						Refresh
+					</button>
+				</div>
+			</div>
 			{#if submissions.length === 0}
 				<p class="no-submissions">No submissions yet. Waiting for students...</p>
 			{:else}
@@ -288,7 +359,7 @@
 		gap: 0.75rem;
 	}
 
-	.loading, .error {
+	.error {
 		text-align: center;
 		padding: 3rem;
 	}
@@ -314,10 +385,55 @@
 		text-align: center;
 	}
 
-	.qr-section h2, .stats-section h2, .submissions-section h2 {
+	.qr-section h2, .stats-section h2 {
 		font-size: 1rem;
 		margin-bottom: 1rem;
 		color: var(--gray-700);
+	}
+
+	.submissions-section h2 {
+		font-size: 1rem;
+		margin-bottom: 0;
+		color: var(--gray-700);
+	}
+
+	.submissions-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 1rem;
+	}
+
+	.submissions-controls {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+	}
+
+	.connection-status {
+		font-size: 0.75rem;
+		padding: 0.25rem 0.5rem;
+		border-radius: 9999px;
+	}
+
+	.connection-status.connected {
+		background: #dcfce7;
+		color: #166534;
+	}
+
+	.connection-status.connecting {
+		background: #fef3c7;
+		color: #92400e;
+	}
+
+	.connection-status.error {
+		background: #fee2e2;
+		color: #991b1b;
+	}
+
+	.btn-small {
+		padding: 0.25rem 0.75rem;
+		font-size: 0.75rem;
 	}
 
 	.join-url {
@@ -437,6 +553,10 @@
 
 		.stats-grid {
 			grid-template-columns: repeat(2, 1fr);
+		}
+
+		.students-grid {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>

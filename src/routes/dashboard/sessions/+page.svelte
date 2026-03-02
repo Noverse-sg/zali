@@ -1,25 +1,12 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { supabase } from '$lib/supabase';
+	import type { PageData } from './$types';
 	import type { Session, Question } from '$lib/types/database';
+
+	export let data: PageData;
 
 	type SessionWithQuestion = Session & { questions: Question };
 
-	let sessions = $state<SessionWithQuestion[]>([]);
-	let loading = $state(true);
-
-	onMount(loadSessions);
-
-	async function loadSessions() {
-		loading = true;
-		const { data } = await supabase
-			.from('sessions')
-			.select('*, questions(*)')
-			.order('created_at', { ascending: false });
-
-		sessions = (data as SessionWithQuestion[]) || [];
-		loading = false;
-	}
+	$: sessions = data.sessions as SessionWithQuestion[];
 
 	function getStatusColor(status: string) {
 		switch (status) {
@@ -30,7 +17,8 @@
 		}
 	}
 
-	function formatDate(date: string) {
+	function formatDate(date: string | null) {
+		if (!date) return 'N/A';
 		return new Date(date).toLocaleDateString('en-US', {
 			month: 'short',
 			day: 'numeric',
@@ -51,9 +39,7 @@
 		</a>
 	</header>
 
-	{#if loading}
-		<div class="loading">Loading sessions...</div>
-	{:else if sessions.length === 0}
+	{#if sessions.length === 0}
 		<div class="empty-state card">
 			<h3>No sessions yet</h3>
 			<p>Start a session from your questions page</p>
@@ -109,7 +95,7 @@
 		color: white;
 	}
 
-	.loading, .empty-state {
+	.empty-state {
 		text-align: center;
 		padding: 3rem;
 	}

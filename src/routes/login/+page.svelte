@@ -1,20 +1,21 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/stores/auth';
+	import type { PageData } from './$types';
 
-	let email = $state('');
-	let password = $state('');
-	let loading = $state(false);
-	let error = $state('');
-	let mode = $state<'login' | 'signup'>('login');
+	export let data: PageData;
+
+	$: ({ supabase } = data);
+
+	let email = '';
+	let password = '';
+	let loading = false;
+	let error = '';
+	let mode: 'login' | 'signup' = 'login';
 
 	// Redirect if already logged in
-	$effect(() => {
-		if ($auth.user) {
-			goto('/dashboard');
-		}
-	});
+	$: if (data.user) {
+		goto('/dashboard');
+	}
 
 	async function handleSubmit() {
 		loading = true;
@@ -22,19 +23,27 @@
 
 		if (mode === 'login') {
 			const { error: err } = await supabase.auth.signInWithPassword({ email, password });
-			if (err) error = err.message;
-			else goto('/dashboard');
+			if (err) {
+				error = err.message;
+				loading = false;
+			} else {
+				// Full page navigation to ensure server gets new session cookies
+				window.location.href = '/dashboard';
+			}
 		} else {
 			const { error: err } = await supabase.auth.signUp({
 				email,
 				password,
 				options: { data: { name: email.split('@')[0] } }
 			});
-			if (err) error = err.message;
-			else goto('/dashboard');
+			if (err) {
+				error = err.message;
+				loading = false;
+			} else {
+				// Full page navigation to ensure server gets new session cookies
+				window.location.href = '/dashboard';
+			}
 		}
-
-		loading = false;
 	}
 </script>
 
@@ -45,7 +54,7 @@
 			{mode === 'login' ? 'Sign in to manage your quizzes' : 'Start creating interactive quizzes'}
 		</p>
 
-		<form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
+		<form on:submit|preventDefault={handleSubmit}>
 			{#if error}
 				<div class="error-msg">{error}</div>
 			{/if}
@@ -80,7 +89,7 @@
 
 		<p class="toggle-mode">
 			{mode === 'login' ? "Don't have an account?" : 'Already have an account?'}
-			<button class="link-btn" onclick={() => mode = mode === 'login' ? 'signup' : 'login'}>
+			<button class="link-btn" on:click={() => mode = mode === 'login' ? 'signup' : 'login'}>
 				{mode === 'login' ? 'Sign up' : 'Sign in'}
 			</button>
 		</p>

@@ -12,7 +12,9 @@ CREATE TABLE questions (
     teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
     description TEXT,
-    model_answer TEXT NOT NULL,
+    model_answer TEXT,
+    answer_key_url TEXT,          -- URL to uploaded answer key file (image, PDF, text)
+    answer_key_type TEXT,         -- MIME type of answer key file
     max_points INTEGER NOT NULL DEFAULT 10,
     time_limit_seconds INTEGER NOT NULL DEFAULT 300,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -151,3 +153,24 @@ USING (bucket_id = 'submissions');
 CREATE POLICY "Service role can update submissions bucket"
 ON storage.objects FOR UPDATE
 USING (bucket_id = 'submissions');
+
+-- Storage bucket for answer keys
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('answer-keys', 'answer-keys', true)
+ON CONFLICT DO NOTHING;
+
+CREATE POLICY "Authenticated users can upload to answer-keys bucket"
+ON storage.objects FOR INSERT
+WITH CHECK (bucket_id = 'answer-keys' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Anyone can view answer-keys bucket"
+ON storage.objects FOR SELECT
+USING (bucket_id = 'answer-keys');
+
+CREATE POLICY "Authenticated users can update answer-keys bucket"
+ON storage.objects FOR UPDATE
+USING (bucket_id = 'answer-keys' AND auth.role() = 'authenticated');
+
+CREATE POLICY "Authenticated users can delete from answer-keys bucket"
+ON storage.objects FOR DELETE
+USING (bucket_id = 'answer-keys' AND auth.role() = 'authenticated');

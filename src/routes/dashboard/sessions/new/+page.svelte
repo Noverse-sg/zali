@@ -1,58 +1,54 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
-	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/stores/auth';
+	import type { PageData } from './$types';
 	import type { Question } from '$lib/types/database';
 	import { nanoid } from 'nanoid';
 
-	let questions = $state<Question[]>([]);
-	let selectedQuestionId = $state('');
-	let loading = $state(true);
-	let creating = $state(false);
+	export let data: PageData;
 
-	onMount(async () => {
-		const { data } = await supabase
-			.from('questions')
-			.select('*')
-			.order('created_at', { ascending: false });
+	// Use supabase client from layout (has auth session)
+	$: ({ supabase } = data);
 
-		questions = data || [];
-		loading = false;
+	$: questions = data.questions as Question[];
 
-		// Pre-select question from URL param
-		const questionParam = $page.url.searchParams.get('question');
-		if (questionParam && questions.find(q => q.id === questionParam)) {
-			selectedQuestionId = questionParam;
-		}
-	});
+	let selectedQuestionId = data.preselectedQuestionId || '';
+	let creating = false;
+	let createError = '';
+
+	$: selectedQuestion = questions.find(q => q.id === selectedQuestionId);
 
 	async function createSession() {
-		if (!$auth.user || !selectedQuestionId) return;
+		if (!data.user || !selectedQuestionId) return;
 
 		creating = true;
+		createError = '';
 		const code = nanoid(6).toUpperCase();
 
-		const { data, error } = await supabase
-			.from('sessions')
-			.insert({
-				teacher_id: $auth.user.id,
-				question_id: selectedQuestionId,
-				code,
-				status: 'waiting'
-			})
-			.select()
-			.single();
+		try {
+			const { data: session, error } = await supabase
+				.from('sessions')
+				.insert({
+					teacher_id: data.user.id,
+					question_id: selectedQuestionId,
+					code,
+					status: 'waiting'
+				})
+				.select()
+				.single();
 
-		if (data && !error) {
-			goto(`/dashboard/sessions/${data.id}`);
+			if (session && !error) {
+				// Full page navigation to ensure server has proper auth context
+				window.location.href = `/dashboard/sessions/${session.id}`;
+			} else {
+				console.error('Failed to create session:', error);
+				createError = 'Failed to create session. Please try again.';
+				creating = false;
+			}
+		} catch (err) {
+			console.error('Error creating session:', err);
+			createError = 'An unexpected error occurred. Please try again.';
+			creating = false;
 		}
-
-		creating = false;
 	}
-
-	const selectedQuestion = $derived(questions.find(q => q.id === selectedQuestionId));
 </script>
 
 <div class="page">
@@ -62,9 +58,7 @@
 		<p>Select a question to start a live session</p>
 	</header>
 
-	{#if loading}
-		<div class="loading">Loading questions...</div>
-	{:else if questions.length === 0}
+	{#if questions.length === 0}
 		<div class="empty-state card">
 			<h3>No questions available</h3>
 			<p>Create a question first before starting a session</p>
@@ -92,18 +86,37 @@
 						{/if}
 						<p><strong>Points:</strong> {selectedQuestion.max_points}</p>
 						<p><strong>Time Limit:</strong> {Math.floor(selectedQuestion.time_limit_seconds / 60)}m {selectedQuestion.time_limit_seconds % 60}s</p>
-						<div class="model-answer">
-							<strong>Model Answer:</strong>
-							<pre>{selectedQuestion.model_answer}</pre>
-						</div>
+						{#if selectedQuestion.answer_key_url}
+							<div class="model-answer">
+								<strong>Answer Key:</strong>
+								{#if selectedQuestion.answer_key_type?.startsWith('image/')}
+									<img src={selectedQuestion.answer_key_url} alt="Answer key" class="answer-key-preview" />
+								{:else if selectedQuestion.answer_key_type === 'application/pdf'}
+									<p class="file-label">PDF file uploaded</p>
+								{:else if selectedQuestion.model_answer}
+									<pre>{selectedQuestion.model_answer}</pre>
+								{:else}
+									<p class="file-label">Text file uploaded</p>
+								{/if}
+							</div>
+						{:else if selectedQuestion.model_answer}
+							<div class="model-answer">
+								<strong>Model Answer:</strong>
+								<pre>{selectedQuestion.model_answer}</pre>
+							</div>
+						{/if}
 					</div>
 				</div>
+			{/if}
+
+			{#if createError}
+				<div class="create-error">{createError}</div>
 			{/if}
 
 			<button
 				class="btn-primary create-btn"
 				disabled={!selectedQuestionId || creating}
-				onclick={createSession}
+				on:click={createSession}
 			>
 				{creating ? 'Creating...' : 'Create Session'}
 			</button>
@@ -138,7 +151,7 @@
 		font-size: 0.875rem;
 	}
 
-	.loading, .empty-state {
+	.empty-state {
 		text-align: center;
 		padding: 3rem;
 	}
@@ -217,6 +230,29 @@
 		overflow-x: auto;
 		white-space: pre-wrap;
 		color: var(--gray-600);
+	}
+
+	.answer-key-preview {
+		max-width: 100%;
+		max-height: 200px;
+		border-radius: 0.375rem;
+		object-fit: contain;
+		margin-top: 0.25rem;
+	}
+
+	.file-label {
+		color: var(--gray-500);
+		font-size: 0.875rem;
+		font-style: italic;
+	}
+
+	.create-error {
+		color: var(--error);
+		font-size: 0.875rem;
+		padding: 0.5rem;
+		background: #fee2e2;
+		border-radius: 0.375rem;
+		margin-bottom: 1rem;
 	}
 
 	.create-btn {

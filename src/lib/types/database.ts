@@ -6,147 +6,283 @@ export type Json =
 	| { [key: string]: Json | undefined }
 	| Json[];
 
-export interface Database {
+export type Database = {
+	// Allows to automatically instantiate createClient with right options
+	__InternalSupabase: {
+		PostgrestVersion: '14.1';
+	};
 	public: {
 		Tables: {
-			teachers: {
-				Row: {
-					id: string;
-					email: string;
-					name: string;
-					created_at: string;
-				};
-				Insert: {
-					id: string;
-					email: string;
-					name: string;
-					created_at?: string;
-				};
-				Update: {
-					id?: string;
-					email?: string;
-					name?: string;
-					created_at?: string;
-				};
-			};
 			questions: {
 				Row: {
-					id: string;
-					teacher_id: string;
-					title: string;
+					answer_key_type: string | null;
+					answer_key_url: string | null;
+					created_at: string | null;
 					description: string | null;
-					model_answer: string;
+					id: string;
 					max_points: number;
+					model_answer: string | null;
+					teacher_id: string;
 					time_limit_seconds: number;
-					created_at: string;
-					updated_at: string;
+					title: string;
+					updated_at: string | null;
 				};
 				Insert: {
-					id?: string;
-					teacher_id: string;
-					title: string;
+					answer_key_type?: string | null;
+					answer_key_url?: string | null;
+					created_at?: string | null;
 					description?: string | null;
-					model_answer: string;
-					max_points: number;
-					time_limit_seconds: number;
-					created_at?: string;
-					updated_at?: string;
+					id?: string;
+					max_points?: number;
+					model_answer?: string | null;
+					teacher_id: string;
+					time_limit_seconds?: number;
+					title: string;
+					updated_at?: string | null;
 				};
 				Update: {
-					id?: string;
-					teacher_id?: string;
-					title?: string;
+					answer_key_type?: string | null;
+					answer_key_url?: string | null;
+					created_at?: string | null;
 					description?: string | null;
-					model_answer?: string;
+					id?: string;
 					max_points?: number;
+					model_answer?: string | null;
+					teacher_id?: string;
 					time_limit_seconds?: number;
-					created_at?: string;
-					updated_at?: string;
+					title?: string;
+					updated_at?: string | null;
 				};
+				Relationships: [
+					{
+						foreignKeyName: 'questions_teacher_id_fkey';
+						columns: ['teacher_id'];
+						isOneToOne: false;
+						referencedRelation: 'teachers';
+						referencedColumns: ['id'];
+					}
+				];
 			};
 			sessions: {
 				Row: {
-					id: string;
-					teacher_id: string;
-					question_id: string;
-					code: string;
-					status: 'waiting' | 'active' | 'closed';
-					started_at: string | null;
 					closed_at: string | null;
-					created_at: string;
+					code: string;
+					created_at: string | null;
+					id: string;
+					question_id: string;
+					started_at: string | null;
+					status: string;
+					teacher_id: string;
 				};
 				Insert: {
-					id?: string;
-					teacher_id: string;
-					question_id: string;
-					code: string;
-					status?: 'waiting' | 'active' | 'closed';
-					started_at?: string | null;
 					closed_at?: string | null;
-					created_at?: string;
+					code: string;
+					created_at?: string | null;
+					id?: string;
+					question_id: string;
+					started_at?: string | null;
+					status?: string;
+					teacher_id: string;
 				};
 				Update: {
-					id?: string;
-					teacher_id?: string;
-					question_id?: string;
-					code?: string;
-					status?: 'waiting' | 'active' | 'closed';
-					started_at?: string | null;
 					closed_at?: string | null;
-					created_at?: string;
+					code?: string;
+					created_at?: string | null;
+					id?: string;
+					question_id?: string;
+					started_at?: string | null;
+					status?: string;
+					teacher_id?: string;
 				};
+				Relationships: [
+					{
+						foreignKeyName: 'sessions_question_id_fkey';
+						columns: ['question_id'];
+						isOneToOne: false;
+						referencedRelation: 'questions';
+						referencedColumns: ['id'];
+					},
+					{
+						foreignKeyName: 'sessions_teacher_id_fkey';
+						columns: ['teacher_id'];
+						isOneToOne: false;
+						referencedRelation: 'teachers';
+						referencedColumns: ['id'];
+					}
+				];
 			};
 			submissions: {
 				Row: {
-					id: string;
-					session_id: string;
-					student_name: string;
-					original_image_url: string;
-					marked_image_url: string | null;
-					score: number | null;
-					max_score: number;
 					feedback: string | null;
-					mistakes: string[] | null;
-					status: 'pending' | 'marking' | 'completed' | 'error';
-					submitted_at: string;
+					id: string;
 					marked_at: string | null;
+					marked_image_url: string | null;
+					max_score: number;
+					mistakes: string[] | null;
+					original_image_url: string;
+					score: number | null;
+					session_id: string;
+					status: string;
+					student_name: string;
+					submitted_at: string | null;
 				};
 				Insert: {
-					id?: string;
-					session_id: string;
-					student_name: string;
-					original_image_url: string;
-					marked_image_url?: string | null;
-					score?: number | null;
-					max_score: number;
 					feedback?: string | null;
-					mistakes?: string[] | null;
-					status?: 'pending' | 'marking' | 'completed' | 'error';
-					submitted_at?: string;
+					id?: string;
 					marked_at?: string | null;
+					marked_image_url?: string | null;
+					max_score: number;
+					mistakes?: string[] | null;
+					original_image_url: string;
+					score?: number | null;
+					session_id: string;
+					status?: string;
+					student_name: string;
+					submitted_at?: string | null;
 				};
 				Update: {
-					id?: string;
-					session_id?: string;
-					student_name?: string;
-					original_image_url?: string;
-					marked_image_url?: string | null;
-					score?: number | null;
-					max_score?: number;
 					feedback?: string | null;
-					mistakes?: string[] | null;
-					status?: 'pending' | 'marking' | 'completed' | 'error';
-					submitted_at?: string;
+					id?: string;
 					marked_at?: string | null;
+					marked_image_url?: string | null;
+					max_score?: number;
+					mistakes?: string[] | null;
+					original_image_url?: string;
+					score?: number | null;
+					session_id?: string;
+					status?: string;
+					student_name?: string;
+					submitted_at?: string | null;
 				};
+				Relationships: [
+					{
+						foreignKeyName: 'submissions_session_id_fkey';
+						columns: ['session_id'];
+						isOneToOne: false;
+						referencedRelation: 'sessions';
+						referencedColumns: ['id'];
+					}
+				];
+			};
+			teachers: {
+				Row: {
+					created_at: string | null;
+					email: string;
+					id: string;
+					name: string;
+				};
+				Insert: {
+					created_at?: string | null;
+					email: string;
+					id: string;
+					name: string;
+				};
+				Update: {
+					created_at?: string | null;
+					email?: string;
+					id?: string;
+					name?: string;
+				};
+				Relationships: [];
 			};
 		};
-		Views: {};
-		Functions: {};
-		Enums: {};
+		Views: {
+			[_ in never]: never;
+		};
+		Functions: {
+			[_ in never]: never;
+		};
+		Enums: {
+			[_ in never]: never;
+		};
+		CompositeTypes: {
+			[_ in never]: never;
+		};
 	};
-}
+};
 
+type DatabaseWithoutInternals = Omit<Database, '__InternalSupabase'>;
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, 'public'>];
+
+export type Tables<
+	DefaultSchemaTableNameOrOptions extends
+		| keyof (DefaultSchema['Tables'] & DefaultSchema['Views'])
+		| { schema: keyof DatabaseWithoutInternals },
+	TableName extends DefaultSchemaTableNameOrOptions extends {
+		schema: keyof DatabaseWithoutInternals;
+	}
+		? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Tables'] &
+				DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Views'])
+		: never = never
+> = DefaultSchemaTableNameOrOptions extends {
+	schema: keyof DatabaseWithoutInternals;
+}
+	? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Tables'] &
+			DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Views'])[TableName] extends {
+			Row: infer R;
+		}
+		? R
+		: never
+	: DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema['Tables'] & DefaultSchema['Views'])
+		? (DefaultSchema['Tables'] &
+				DefaultSchema['Views'])[DefaultSchemaTableNameOrOptions] extends {
+				Row: infer R;
+			}
+			? R
+			: never
+		: never;
+
+export type TablesInsert<
+	DefaultSchemaTableNameOrOptions extends
+		| keyof DefaultSchema['Tables']
+		| { schema: keyof DatabaseWithoutInternals },
+	TableName extends DefaultSchemaTableNameOrOptions extends {
+		schema: keyof DatabaseWithoutInternals;
+	}
+		? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Tables']
+		: never = never
+> = DefaultSchemaTableNameOrOptions extends {
+	schema: keyof DatabaseWithoutInternals;
+}
+	? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Tables'][TableName] extends {
+			Insert: infer I;
+		}
+		? I
+		: never
+	: DefaultSchemaTableNameOrOptions extends keyof DefaultSchema['Tables']
+		? DefaultSchema['Tables'][DefaultSchemaTableNameOrOptions] extends {
+				Insert: infer I;
+			}
+			? I
+			: never
+		: never;
+
+export type TablesUpdate<
+	DefaultSchemaTableNameOrOptions extends
+		| keyof DefaultSchema['Tables']
+		| { schema: keyof DatabaseWithoutInternals },
+	TableName extends DefaultSchemaTableNameOrOptions extends {
+		schema: keyof DatabaseWithoutInternals;
+	}
+		? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Tables']
+		: never = never
+> = DefaultSchemaTableNameOrOptions extends {
+	schema: keyof DatabaseWithoutInternals;
+}
+	? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions['schema']]['Tables'][TableName] extends {
+			Update: infer U;
+		}
+		? U
+		: never
+	: DefaultSchemaTableNameOrOptions extends keyof DefaultSchema['Tables']
+		? DefaultSchema['Tables'][DefaultSchemaTableNameOrOptions] extends {
+				Update: infer U;
+			}
+			? U
+			: never
+		: never;
+
+// Convenience type exports
 export type Teacher = Database['public']['Tables']['teachers']['Row'];
 export type Question = Database['public']['Tables']['questions']['Row'];
 export type Session = Database['public']['Tables']['sessions']['Row'];

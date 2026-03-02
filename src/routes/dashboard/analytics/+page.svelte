@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { supabase } from '$lib/supabase';
-	import { auth } from '$lib/stores/auth';
+	import type { PageData } from './$types';
+
+	export let data: PageData;
 
 	interface SessionAnalytics {
 		id: string;
@@ -14,74 +14,9 @@
 		commonMistakes: { mistake: string; count: number }[];
 	}
 
-	let sessions = $state<SessionAnalytics[]>([]);
-	let loading = $state(true);
-	let selectedSession = $state<SessionAnalytics | null>(null);
+	$: sessions = data.analyticsData as SessionAnalytics[];
 
-	onMount(loadAnalytics);
-
-	async function loadAnalytics() {
-		loading = true;
-
-		// Get all sessions with their questions
-		const { data: sessionsData } = await supabase
-			.from('sessions')
-			.select('id, code, created_at, questions(title, max_points)')
-			.order('created_at', { ascending: false });
-
-		if (!sessionsData) {
-			loading = false;
-			return;
-		}
-
-		// Get submissions for each session
-		const analyticsPromises = sessionsData.map(async (session) => {
-			const { data: submissions } = await supabase
-				.from('submissions')
-				.select('score, max_score, mistakes')
-				.eq('session_id', session.id)
-				.eq('status', 'completed');
-
-			const completedSubmissions = submissions || [];
-			const totalSubmissions = completedSubmissions.length;
-
-			// Calculate average score
-			const avgScore = totalSubmissions > 0
-				? Math.round(
-					completedSubmissions.reduce((sum, s) => sum + (s.score || 0), 0) / totalSubmissions
-				)
-				: 0;
-
-			// Aggregate mistakes
-			const mistakeCounts: Record<string, number> = {};
-			for (const submission of completedSubmissions) {
-				if (submission.mistakes) {
-					for (const mistake of submission.mistakes) {
-						mistakeCounts[mistake] = (mistakeCounts[mistake] || 0) + 1;
-					}
-				}
-			}
-
-			const commonMistakes = Object.entries(mistakeCounts)
-				.map(([mistake, count]) => ({ mistake, count }))
-				.sort((a, b) => b.count - a.count)
-				.slice(0, 10);
-
-			return {
-				id: session.id,
-				code: session.code,
-				questionTitle: (session.questions as any)?.title || 'Unknown',
-				createdAt: session.created_at,
-				totalSubmissions,
-				avgScore,
-				maxScore: (session.questions as any)?.max_points || 10,
-				commonMistakes
-			};
-		});
-
-		sessions = await Promise.all(analyticsPromises);
-		loading = false;
-	}
+	let selectedSession: SessionAnalytics | null = null;
 
 	function formatDate(date: string) {
 		return new Date(date).toLocaleDateString('en-US', {
@@ -105,9 +40,7 @@
 		<p>View performance data and common mistakes across your sessions</p>
 	</header>
 
-	{#if loading}
-		<div class="loading">Loading analytics...</div>
-	{:else if sessions.length === 0}
+	{#if sessions.length === 0}
 		<div class="empty-state card">
 			<h3>No data yet</h3>
 			<p>Complete some quiz sessions to see analytics here</p>
@@ -120,7 +53,7 @@
 					<button
 						class="card session-item"
 						class:selected={selectedSession?.id === session.id}
-						onclick={() => selectedSession = session}
+						on:click={() => selectedSession = session}
 					>
 						<div class="session-header">
 							<strong>{session.questionTitle}</strong>
@@ -205,7 +138,7 @@
 		font-size: 0.875rem;
 	}
 
-	.loading, .empty-state {
+	.empty-state {
 		text-align: center;
 		padding: 3rem;
 	}
@@ -216,6 +149,7 @@
 
 	.empty-state p {
 		color: var(--gray-500);
+		margin-bottom: 1rem;
 	}
 
 	.analytics-grid {

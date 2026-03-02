@@ -1,55 +1,51 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { auth } from '$lib/stores/auth';
+	import type { LayoutData } from './$types';
 
-	let { children } = $props();
-
-	// Redirect if not logged in
-	$effect(() => {
-		if (!$auth.loading && !$auth.user) {
-			goto('/login');
-		}
-	});
+	export let data: LayoutData;
 
 	const navItems = [
 		{ href: '/dashboard', label: 'Questions', icon: '?' },
 		{ href: '/dashboard/sessions', label: 'Sessions', icon: '>' },
 		{ href: '/dashboard/analytics', label: 'Analytics', icon: '#' }
 	];
+
+	async function signOut() {
+		await data.supabase.auth.signOut();
+		// Full page navigation to ensure server clears session
+		window.location.href = '/login';
+	}
 </script>
 
-{#if $auth.user}
-	<div class="dashboard">
-		<aside class="sidebar">
-			<div class="logo">QuizMark</div>
-			<nav>
-				{#each navItems as item}
-					<a
-						href={item.href}
-						class="nav-item"
-						class:active={$page.url.pathname === item.href}
-					>
-						<span class="icon">{item.icon}</span>
-						{item.label}
-					</a>
-				{/each}
-			</nav>
-			<div class="user-section">
-				<div class="user-info">
-					<span class="user-name">{$auth.teacher?.name || 'Teacher'}</span>
-					<span class="user-email">{$auth.user.email}</span>
-				</div>
-				<button class="btn-secondary" onclick={() => auth.signOut()}>
-					Sign Out
-				</button>
+<div class="dashboard">
+	<aside class="sidebar">
+		<div class="logo">QuizMark</div>
+		<nav>
+			{#each navItems as item}
+				<a
+					href={item.href}
+					class="nav-item"
+					class:active={$page.url.pathname === item.href}
+				>
+					<span class="icon">{item.icon}</span>
+					{item.label}
+				</a>
+			{/each}
+		</nav>
+		<div class="user-section">
+			<div class="user-info">
+				<span class="user-name">{data.teacher?.name || 'Teacher'}</span>
+				<span class="user-email">{data.user?.email}</span>
 			</div>
-		</aside>
-		<main class="content">
-			{@render children()}
-		</main>
-	</div>
-{/if}
+			<button class="btn-secondary" on:click={signOut}>
+				Sign Out
+			</button>
+		</div>
+	</aside>
+	<main class="content">
+		<slot />
+	</main>
+</div>
 
 <style>
 	.dashboard {
